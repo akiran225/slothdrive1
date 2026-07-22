@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>SlothDrive</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#0F1613; --surface:#18221D; --surface2:#202D26; --line:#2C3A32;
+    --sloth:#86B96A; --amber:#E8A544; --sky:#6FB2C7; --alert:#E4674F;
+    --text:#E9F0EA; --muted:#8FA396;
+    --display:'Space Grotesk',system-ui,sans-serif; --body:'Inter',system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+  html,body{height:100%}
+  body{background:var(--bg);color:var(--text);font-family:var(--body);
+    display:flex;flex-direction:column;overflow:hidden;height:100dvh}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;flex:0 0 auto}
+  .brand{font-family:var(--display);font-weight:700;font-size:20px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+  .brand small{font-weight:500;font-size:12px;color:var(--muted)}
+  .top-actions{display:flex;gap:8px}
+  .chip{background:var(--surface);border:1px solid var(--line);color:var(--muted);border-radius:999px;padding:7px 12px;font-size:13px;font-weight:500;cursor:pointer}
+  .chip:active{background:var(--surface2)}
+  main{flex:1 1 auto;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:26px;padding:20px;text-align:center}
+  .orb-wrap{position:relative;width:190px;height:190px;display:grid;place-items:center}
+  .orb{width:150px;height:150px;border-radius:50%;background:radial-gradient(circle at 35% 30%, #2b3b32, #17211c);border:2px solid var(--sloth);position:relative;z-index:2;display:grid;place-items:center;transition:border-color .4s, box-shadow .4s}
+  .orb .glyph{font-size:52px;line-height:1}
+  .ring{position:absolute;inset:0;border-radius:50%;border:2px solid var(--sloth);opacity:0;z-index:1}
+  body[data-state="idle"] .orb{border-color:var(--sloth);box-shadow:0 0 30px -6px var(--sloth)}
+  body[data-state="listening"] .orb{box-shadow:0 0 45px -4px var(--sloth)}
+  body[data-state="listening"] .ring{animation:pulse 1.6s ease-out infinite;border-color:var(--sloth);opacity:1}
+  body[data-state="thinking"] .orb{border-color:var(--sky);box-shadow:0 0 40px -6px var(--sky)}
+  body[data-state="thinking"] .ring{animation:spin 1s linear infinite;border-color:transparent;border-top-color:var(--sky);opacity:1}
+  body[data-state="speaking"] .orb{border-color:var(--amber);box-shadow:0 0 50px -4px var(--amber)}
+  body[data-state="speaking"] .ring{animation:pulse 1.1s ease-out infinite;border-color:var(--amber);opacity:1}
+  body[data-state="alert"] .orb{border-color:var(--alert);box-shadow:0 0 60px -2px var(--alert)}
+  body[data-state="alert"] .ring{animation:pulse .7s ease-out infinite;border-color:var(--alert);opacity:1}
+  @keyframes pulse{0%{transform:scale(1);opacity:.7}100%{transform:scale(1.32);opacity:0}}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .state-label{font-family:var(--display);font-weight:600;font-size:15px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .caption{font-size:20px;line-height:1.45;max-width:520px;min-height:60px;font-weight:500}
+  .caption .who{display:block;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px}
+  footer{flex:0 0 auto;padding:16px 18px calc(16px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:12px;align-items:center}
+  .primary{width:100%;max-width:440px;border:none;border-radius:16px;padding:20px;font-family:var(--display);font-weight:700;font-size:19px;color:#0F1613;background:var(--sloth);cursor:pointer;transition:transform .1s, background .3s}
+  .primary:active{transform:scale(.985)}
+  .primary.stop{background:var(--alert);color:#fff}
+  .secondary-row{display:flex;gap:12px;width:100%;max-width:440px}
+  .secondary-row button{flex:1;border:1px solid var(--line);background:var(--surface);color:var(--text);border-radius:14px;padding:14px;font-weight:600;font-size:15px;cursor:pointer}
+  .secondary-row button:active{background:var(--surface2)}
+  .panel{position:fixed;inset:0;background:var(--bg);z-index:50;display:none;flex-direction:column}
+  .panel.open{display:flex}
+  .panel-head{display:flex;align-items:center;justify-content:space-between;padding:16px 18px;border-bottom:1px solid var(--line)}
+  .panel-head h2{font-family:var(--display);font-size:18px}
+  .panel-body{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:14px}
+  .close{background:none;border:none;color:var(--muted);font-size:26px;cursor:pointer;line-height:1}
+  #map{flex:1;min-height:300px;border-radius:14px;overflow:hidden;border:1px solid var(--line)}
+  .speed-box{display:flex;align-items:baseline;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .speed-box .val{font-family:var(--display);font-weight:700;font-size:48px;line-height:1}
+  .speed-box.over .val{color:var(--alert)}
+  .speed-box .unit{color:var(--muted);font-weight:600}
+  .speed-box .lim{margin-left:auto;text-align:right;color:var(--muted);font-size:13px}
+  .nav-row{display:flex;gap:8px}
+  .nav-row input{flex:1}
+  .btn-sm{border:1px solid var(--line);background:var(--surface2);color:var(--text);border-radius:12px;padding:0 16px;font-weight:600;cursor:pointer;white-space:nowrap}
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px;font-weight:500}
+  input,select{width:100%;background:var(--surface);border:1px solid var(--line);color:var(--text);border-radius:12px;padding:13px;font-size:15px;font-family:var(--body)}
+  input:focus,select:focus{outline:none;border-color:var(--sloth)}
+  .row{display:flex;gap:12px}.row>*{flex:1}
+  .switch{display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px;font-size:14px}
+  .switch input{width:auto}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5}
+  .save{background:var(--sloth);color:#0F1613;border:none;border-radius:12px;padding:14px;font-weight:700;font-family:var(--display);cursor:pointer;font-size:16px}
+  .divider{border-top:1px solid var(--line);margin:4px 0;padding-top:10px;font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:var(--surface2);border:1px solid var(--line);color:var(--text);padding:12px 18px;border-radius:12px;font-size:14px;z-index:100;max-width:90%;text-align:center;display:none}
+  .banner{background:#3a2420;border:1px solid var(--alert);color:#ffd9d0;border-radius:12px;padding:12px 14px;font-size:14px;display:none}
+  .banner.show{display:block}
+  .stat{display:flex;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line)}
+  .stat b{font-family:var(--display)}
+</style>
+</head>
+<body data-state="idle">
+  <header>
+    <div class="brand">🦥 SlothDrive <small id="lvlTag">A1</small></div>
+    <div class="top-actions">
+      <button class="chip" id="btnSettings">⚙︎ Réglages</button>
+    </div>
+  </header>
+
+  <main>
+    <div class="orb-wrap"><div class="ring"></div><div class="orb"><span class="glyph" id="glyph">🦥</span></div></div>
+    <div class="state-label" id="stateLabel">Prêt</div>
+    <div class="caption" id="caption"><span class="who">Compagnon</span>Appuie sur « Démarrer » et parle-moi en anglais. Dis-moi aussi « emmène-moi à… », « c'est bloqué », ou « il y a un radar ».</div>
+  </main>
+
+  <footer>
+    <div class="banner" id="keyBanner">Ajoute ta clé Gemini dans ⚙︎ pour activer la conversation.</div>
+    <button class="primary" id="btnTalk">Démarrer la conversation</button>
+    <div class="secondary-row">
+      <button id="btnMap">🗺️ Carte &amp; vitesse</button>
+      <button id="btnEnd">Terminer</button>
+    </div>
+  </footer>
+
+  <!-- Carte / navigation / vitesse -->
+  <div class="panel" id="mapPanel">
+    <div class="panel-head"><h2>Carte &amp; navigation</h2><button class="close" data-close="mapPanel">×</button></div>
+    <div class="panel-body">
+      <div class="nav-row">
+        <input id="inpDest" placeholder="Où va-t-on ? (adresse, ville…)">
+        <button class="btn-sm" id="btnGo">Y aller</button>
+      </div>
+      <div class="speed-box" id="speedBox">
+        <span class="val" id="speedVal">--</span><span class="unit">km/h</span>
+        <span class="lim">Alerte &gt; <b id="limLabel">50</b> km/h<br><span id="routeInfo">Aucun itinéraire</span></span>
+      </div>
+      <div id="map"></div>
+      <div class="nav-row">
+        <button class="btn-sm" id="btnAvoid" style="flex:1">🚧 Éviter ici</button>
+        <button class="btn-sm" id="btnRadar" style="flex:1">📷 Radar ici</button>
+        <button class="btn-sm" id="btnClear" style="flex:1">✕ Effacer</button>
+      </div>
+      <p class="hint">Vitesse issue du GPS (plus juste que ton compteur qui sous-affiche ~5 km/h). Tu peux tout faire à la voix pendant la conversation : « emmène-moi à Rouen », « c'est bouché, évite », « il y a un radar ».</p>
+    </div>
+  </div>
+
+  <!-- Réglages -->
+  <div class="panel" id="settingsPanel">
+    <div class="panel-head"><h2>Réglages</h2><button class="close" data-close="settingsPanel">×</button></div>
+    <div class="panel-body">
+      <div>
+        <label>Clé API Gemini (reste sur ton téléphone)</label>
+        <input type="password" id="inpKey" placeholder="AIzaSy...">
+        <p class="hint">Gratuite sur aistudio.google.com/apikey. Stockée uniquement dans ce navigateur.</p>
+      </div>
+      <div class="row">
+        <div><label>Niveau d'anglais</label>
+          <select id="inpLevel"><option value="A1">A1 — débutant</option><option value="A2">A2 — élémentaire</option><option value="B1">B1 — intermédiaire</option><option value="B2">B2 — avancé</option></select>
+        </div>
+        <div><label>Alerte vitesse (km/h)</label><input type="number" id="inpLimit" value="50" min="20" max="140" step="5"></div>
+      </div>
+      <div class="switch"><span>Copilote vitesse (alerte vocale)</span><input type="checkbox" id="inpAlert" checked></div>
+
+      <div class="divider">Itinéraire — à éviter</div>
+      <div class="switch"><span>Éviter les autoroutes</span><input type="checkbox" id="inpHw"></div>
+      <div class="switch"><span>Éviter les péages</span><input type="checkbox" id="inpToll" checked></div>
+      <div class="switch"><span>Éviter les ferries / bacs</span><input type="checkbox" id="inpFerry" checked></div>
+
+      <div class="divider">Radars — fichier officiel</div>
+      <div>
+        <label>Importer le fichier des radars (CSV ou GeoJSON de data.gouv.fr)</label>
+        <input type="file" id="inpRadarFile" accept=".csv,.json,.geojson,text/csv">
+        <p class="hint" id="radarInfo">Aucun radar chargé.</p>
+      </div>
+
+      <button class="save" id="btnSave">Enregistrer</button>
+      <p class="hint" id="memInfo"></p>
+    </div>
+  </div>
+
+  <!-- Bilan -->
+  <div class="panel" id="endPanel">
+    <div class="panel-head"><h2>Ton bilan</h2><button class="close" data-close="endPanel">×</button></div>
+    <div class="panel-body" id="endBody"></div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+  "use strict";
+  const GEMINI_MODEL="gemini-2.5-flash";
+  const $=id=>document.getElementById(id);
+
+  // ---------- Config ----------
+  const cfg={
+    key:localStorage.getItem('sd_key')||'', level:localStorage.getItem('sd_level')||'A1',
+    limit:parseInt(localStorage.getItem('sd_limit')||'50',10), alert:localStorage.getItem('sd_alert')!=='0',
+    avoidHw:localStorage.getItem('sd_hw')==='1', avoidToll:localStorage.getItem('sd_toll')!=='0',
+    avoidFerry:localStorage.getItem('sd_ferry')!=='0',
+  };
+  function saveCfg(){ localStorage.setItem('sd_key',cfg.key);localStorage.setItem('sd_level',cfg.level);
+    localStorage.setItem('sd_limit',String(cfg.limit));localStorage.setItem('sd_alert',cfg.alert?'1':'0');
+    localStorage.setItem('sd_hw',cfg.avoidHw?'1':'0');localStorage.setItem('sd_toll',cfg.avoidToll?'1':'0');
+    localStorage.setItem('sd_ferry',cfg.avoidFerry?'1':'0'); }
+
+  // ---------- Mémoire ----------
+  let memory; try{memory=JSON.parse(localStorage.getItem('sd_memory'));}catch(e){}
+  if(!memory) memory={profile:{},frequent_errors:[],vocab_learned:[],sessions:[]};
+  function saveMem(){ localStorage.setItem('sd_memory',JSON.stringify(memory)); }
+
+  // ---------- Radars persistés ----------
+  let radars; try{radars=JSON.parse(localStorage.getItem('sd_radars'));}catch(e){}
+  if(!Array.isArray(radars)) radars=[];
+  function saveRadars(){ try{localStorage.setItem('sd_radars',JSON.stringify(radars));}catch(e){toast('Trop de radars pour le stockage local.');} }
+
+  // ---------- État ----------
+  let convoActive=false, appState='idle', history=[];
+  let recog=null, recogRunning=false;
+  let drive={maxSpeed:0,alerts:0,startedAt:null};
+  let lastAlertAt=0, lastRadarWarn=0, lastPos=null, destPos=null, avoidPoints=[];
+
+  const LEVELS={
+    A1:"Very simple English, short sentences, present tense, slow. A short French hint in parentheses if stuck. 1-2 sentences.",
+    A2:"Simple everyday English, a few useful words. Short French hint only if needed. 2-3 sentences.",
+    B1:"Natural conversational English and some idioms. Avoid French. Encourage longer answers.",
+    B2:"Rich natural English, idioms and humour. Never French. Challenge with follow-ups."
+  };
+  function memText(){const p=Object.entries(memory.profile||{});let s=[];
+    if(p.length)s.push("You remember: "+p.map(([k,v])=>k+": "+v).join("; ")+".");
+    if(memory.frequent_errors.length)s.push("Gently watch for: "+memory.frequent_errors.slice(0,6).join("; ")+".");
+    if(memory.vocab_learned.length)s.push("Reuse words: "+memory.vocab_learned.slice(-12).join(", ")+".");
+    return s.join(" ")||"You don't know this user yet — ask friendly questions.";}
+  function systemPrompt(){
+    return "You are 'SlothDrive', a warm, patient English companion AND a driving copilot. "
+      +"Chat in English like a friend/teacher to help fluency: never judge, correct kindly in one short line at the right moment, show personality, ask ONE question at a time, keep replies short and spoken-friendly.\n"
+      +"You ALSO control the GPS. When the user (in French or English) implies a driving command, set the action field:\n"
+      +"- wants to go somewhere ('emmène-moi à X', 'take me to X') -> action 'navigate', put the place in 'destination'.\n"
+      +"- says it's blocked / jam ahead ('c'est bloqué', 'bouchon', 'traffic jam') -> action 'reroute_avoid'.\n"
+      +"- reports a speed camera ('radar', 'speed camera') -> action 'mark_radar'.\n"
+      +"- cancel route ('annule', 'stop navigation') -> action 'clear_route'.\n"
+      +"Otherwise action 'none'. Always fill 'say' with your short spoken reply (in English for practice; a brief French confirmation is fine for a driving action).\n\n"
+      +"LEVEL "+cfg.level+": "+LEVELS[cfg.level]+"\nMEMORY: "+memText();
+  }
+
+  // ---------- UI ----------
+  function setState(s){appState=s;document.body.dataset.state=s;
+    const L={idle:'Prêt',listening:'Je t\u2019écoute',thinking:'…',speaking:'Je parle',alert:'Attention'};
+    const G={idle:'🦥',listening:'🎙️',thinking:'💭',speaking:'💬',alert:'⚠️'};
+    $('stateLabel').textContent=L[s]||'';$('glyph').textContent=G[s]||'🦥';}
+  function caption(who,txt){$('caption').innerHTML='<span class="who">'+who+'</span>'+txt;}
+  function toast(m){const t=$('toast');t.textContent=m;t.style.display='block';clearTimeout(t._t);t._t=setTimeout(()=>t.style.display='none',3800);}
+  function refreshKeyBanner(){$('keyBanner').classList.toggle('show',!cfg.key);}
+
+  // ---------- Voix ----------
+  function speak(text,lang,done){
+    if(!('speechSynthesis'in window)){if(done)done();return;}
+    const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=lang==='fr-FR'?1.02:0.96;
+    const v=(speechSynthesis.getVoices()||[]).find(v=>v.lang&&v.lang.startsWith(lang.slice(0,2)));if(v)u.voice=v;
+    u.onend=()=>{if(done)done();};u.onerror=()=>{if(done)done();};
+    speechSynthesis.cancel();speechSynthesis.speak(u);
+  }
+  const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
+  function buildRecog(){if(!SR)return null;const r=new SR();r.lang='en-US';r.continuous=false;r.interimResults=true;r.maxAlternatives=1;
+    r.onstart=()=>{recogRunning=true;};
+    r.onresult=e=>{const res=e.results[e.results.length-1];const t=res[0].transcript;
+      if(res.isFinal){const c=t.trim();if(c){stopRecog();onUserSpeech(c);}}else caption('Toi',t);};
+    r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){toast('Micro refusé — autorise-le puis relance.');stopConvo();}};
+    r.onend=()=>{recogRunning=false;if(convoActive&&appState==='listening'){try{r.start();}catch(_){}}};
+    return r;}
+  function startRecog(){if(recog){try{recog.start();}catch(_){}}}
+  function stopRecog(){if(recog&&recogRunning){try{recog.stop();}catch(_){}}}
+  function listen(){if(!convoActive)return;setState('listening');startRecog();}
+
+  // ---------- Conversation + actions GPS ----------
+  async function onUserSpeech(text){
+    caption('Toi',text);setState('thinking');
+    history.push({role:'user',parts:[{text}]});
+    let out;
+    try{out=await askGemini();}catch(err){toast('Erreur Gemini : '+err.message);setState('idle');if(convoActive)listen();return;}
+    history.push({role:'model',parts:[{text:out.say}]});
+    handleAction(out);              // exécute l'ordre GPS s'il y en a un
+    caption('Compagnon',out.say);setState('speaking');
+    speak(out.say,'en-US',()=>{if(convoActive)listen();else setState('idle');});
+  }
+  async function askGemini(){
+    if(!cfg.key)throw new Error('clé manquante');
+    const body={systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
+      generationConfig:{temperature:0.7,maxOutputTokens:260,responseMimeType:"application/json",
+        responseSchema:{type:"object",properties:{
+          say:{type:"string"},
+          action:{type:"string",enum:["none","navigate","reroute_avoid","mark_radar","clear_route"]},
+          destination:{type:"string"}},required:["say","action"]}}};
+    const res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+GEMINI_MODEL+":generateContent?key="+encodeURIComponent(cfg.key),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const data=await res.json();
+    if(data.error)throw new Error(data.error.message||'API');
+    const raw=(data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();
+    try{const o=JSON.parse(raw);if(!o.say)throw 0;return o;}
+    catch(e){return {say:raw||"Sorry, can you say that again?",action:"none"};}
+  }
+  function handleAction(out){
+    switch(out.action){
+      case 'navigate': if(out.destination) routeTo(out.destination); break;
+      case 'reroute_avoid': avoidHere(); break;
+      case 'mark_radar': markRadar(); break;
+      case 'clear_route': clearRoute(); break;
+    }
+  }
+
+  function startConvo(){
+    if(!cfg.key){openPanel('settingsPanel');toast('Ajoute d\u2019abord ta clé Gemini.');return;}
+    if(!SR){toast('Reconnaissance vocale non gérée. Utilise Chrome (Android).');return;}
+    if(!recog)recog=buildRecog();
+    convoActive=true;drive.startedAt=drive.startedAt||Date.now();startGeo();
+    $('btnTalk').textContent='Arrêter';$('btnTalk').classList.add('stop');
+    setState('speaking');caption('Compagnon','Hi! I\u2019m here with you.');
+    speak("Hi! I'm here with you. Where are we going, or how are you today?",'en-US',()=>listen());
+  }
+  function stopConvo(){convoActive=false;stopRecog();if('speechSynthesis'in window)speechSynthesis.cancel();
+    $('btnTalk').textContent='Démarrer la conversation';$('btnTalk').classList.remove('stop');
+    setState('idle');caption('Compagnon','En pause. Reprends quand tu veux.');}
+
+  // ---------- GPS / vitesse / radars ----------
+  let map=null,marker=null,routeLine=null,radarLayer=null,destMarker=null,watchId=null;
+  function startGeo(){
+    if(!('geolocation'in navigator)||watchId!==null)return;
+    watchId=navigator.geolocation.watchPosition(pos=>{
+      const c=pos.coords;lastPos={lat:c.latitude,lon:c.longitude};
+      const kmh=(c.speed==null||isNaN(c.speed))?null:Math.max(0,Math.round(c.speed*3.6));
+      updateSpeed(kmh);
+      if(kmh!=null)drive.maxSpeed=Math.max(drive.maxSpeed,kmh);
+      if(map){const ll=[c.latitude,c.longitude];if(!marker){marker=L.circleMarker(ll,{radius:8,color:'#6FB2C7',fillColor:'#6FB2C7',fillOpacity:.9}).addTo(map);}else marker.setLatLng(ll);
+        if(!destPos)map.setView(ll,Math.max(map.getZoom(),15));}
+      checkSpeed(kmh);checkRadar();
+    },err=>toast('Position : '+err.message),{enableHighAccuracy:true,maximumAge:1000,timeout:12000});
+  }
+  function updateSpeed(kmh){$('speedVal').textContent=kmh==null?'--':kmh;$('speedBox').classList.toggle('over',kmh!=null&&kmh>cfg.limit);}
+  function checkSpeed(kmh){
+    if(!cfg.alert||kmh==null||kmh<=cfg.limit)return;
+    const now=Date.now();if(now-lastAlertAt<9000)return;
+    if(appState==='thinking'||appState==='speaking')return;
+    lastAlertAt=now;drive.alerts++;const was=convoActive;stopRecog();setState('alert');
+    speak("Attention, tu roules à "+kmh+". Ralentis un peu.",'fr-FR',()=>{if(was)listen();else setState('idle');});
+  }
+  function dist(a,b){const R=6371000,dLat=(b.lat-a.lat)*Math.PI/180,dLon=(b.lon-a.lon)*Math.PI/180,
+    la1=a.lat*Math.PI/180,la2=b.lat*Math.PI/180,
+    x=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));}
+  function checkRadar(){
+    if(!lastPos||!radars.length)return;const now=Date.now();if(now-lastRadarWarn<15000)return;
+    if(appState==='thinking'||appState==='speaking'||appState==='alert')return;
+    for(const r of radars){const d=dist(lastPos,r);if(d<350){lastRadarWarn=now;const was=convoActive;stopRecog();setState('alert');
+      speak("Radar à environ "+Math.round(d)+" mètres. Attention à ta vitesse.",'fr-FR',()=>{if(was)listen();else setState('idle');});break;}}
+  }
+  function markRadar(){
+    if(!lastPos){toast('Position inconnue.');return;}
+    radars.push({lat:lastPos.lat,lon:lastPos.lon});saveRadars();drawRadars();
+    $('radarInfo').textContent=radars.length+' radar(s) sur la carte.';toast('Radar noté ici.');
+  }
+  function drawRadars(){
+    if(!map)return;if(radarLayer)radarLayer.remove();radarLayer=L.layerGroup();
+    radars.forEach(r=>L.circleMarker([r.lat,r.lon],{radius:6,color:'#E8A544',fillColor:'#E8A544',fillOpacity:.9}).addTo(radarLayer));
+    radarLayer.addTo(map);
+  }
+
+  // ---------- Navigation (Nominatim + Valhalla, sans clé) ----------
+  async function geocode(q){
+    const r=await fetch("https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=fr&q="+encodeURIComponent(q));
+    const a=await r.json();return a.length?{lat:parseFloat(a[0].lat),lon:parseFloat(a[0].lon),name:a[0].display_name}:null;
+  }
+  function decodePoly(str){let i=0,lat=0,lng=0,c=[],b,sh,res,f=1e6;
+    while(i<str.length){sh=0;res=0;do{b=str.charCodeAt(i++)-63;res|=(b&0x1f)<<sh;sh+=5;}while(b>=0x20);lat+=(res&1)?~(res>>1):(res>>1);
+      sh=0;res=0;do{b=str.charCodeAt(i++)-63;res|=(b&0x1f)<<sh;sh+=5;}while(b>=0x20);lng+=(res&1)?~(res>>1):(res>>1);
+      c.push([lat/f,lng/f]);}return c;}
+  async function routeTo(destText){
+    if(!map){openPanel('mapPanel');await new Promise(r=>setTimeout(r,200));}
+    if(!lastPos){toast('Position inconnue — active le GPS.');return;}
+    toast('Calcul de l\u2019itinéraire…');
+    let g; try{g=await geocode(destText);}catch(e){toast('Géocodage indisponible.');return;}
+    if(!g){toast('Adresse introuvable : '+destText);return;}
+    destPos=g;avoidPoints=[];await computeRoute();
+  }
+  async function computeRoute(){
+    if(!lastPos||!destPos)return;
+    const co={use_highways:cfg.avoidHw?0:1,use_tolls:cfg.avoidToll?0:1,use_ferry:cfg.avoidFerry?0:1};
+    const body={locations:[{lat:lastPos.lat,lon:lastPos.lon},{lat:destPos.lat,lon:destPos.lon}],
+      costing:"auto",costing_options:{auto:co},directions_options:{units:"kilometers"}};
+    if(avoidPoints.length)body.exclude_locations=avoidPoints;
+    let data;
+    try{const res=await fetch("https://valhalla1.openstreetmap.de/route",{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});data=await res.json();}
+    catch(e){toast('Routeur indisponible.');return;}
+    if(!data.trip||!data.trip.legs){toast('Itinéraire introuvable.');return;}
+    let pts=[];data.trip.legs.forEach(l=>{pts=pts.concat(decodePoly(l.shape));});
+    if(routeLine)routeLine.remove();
+    routeLine=L.polyline(pts,{color:'#86B96A',weight:6,opacity:.9}).addTo(map);
+    if(destMarker)destMarker.remove();
+    destMarker=L.marker([destPos.lat,destPos.lon]).addTo(map);
+    map.fitBounds(routeLine.getBounds(),{padding:[40,40]});
+    const s=data.trip.summary;
+    $('routeInfo').textContent=Math.round(s.length)+' km · '+Math.round(s.time/60)+' min';
+    toast('Itinéraire prêt.');
+  }
+  function avoidHere(){
+    if(!destPos){toast('Aucun itinéraire à recalculer.');return;}
+    if(!lastPos)return;avoidPoints.push({lat:lastPos.lat,lon:lastPos.lon});
+    toast('Je recalcule en évitant ce point.');computeRoute();
+  }
+  function clearRoute(){destPos=null;avoidPoints=[];if(routeLine){routeLine.remove();routeLine=null;}if(destMarker){destMarker.remove();destMarker=null;}$('routeInfo').textContent='Aucun itinéraire';}
+
+  // ---------- Import fichier radars ----------
+  function importRadars(file){
+    const rd=new FileReader();
+    rd.onload=()=>{try{
+      const txt=rd.result;let found=[];
+      if(file.name.match(/\.(json|geojson)$/i)||txt.trim().startsWith('{')){
+        const j=JSON.parse(txt);const feats=j.features||[];
+        feats.forEach(f=>{const g=f.geometry;if(g&&g.type==='Point'){found.push({lat:g.coordinates[1],lon:g.coordinates[0]});}});
+      }else{
+        const lines=txt.split(/\r?\n/).filter(x=>x.trim());
+        const sep=lines[0].includes(';')?';':',';
+        const head=lines[0].split(sep).map(h=>h.trim().toLowerCase());
+        const li=head.findIndex(h=>/lat/.test(h)),oi=head.findIndex(h=>/lon|lng/.test(h));
+        if(li<0||oi<0){toast('Colonnes latitude/longitude introuvables.');return;}
+        for(let k=1;k<lines.length;k++){const c=lines[k].split(sep);
+          const la=parseFloat((c[li]||'').replace(',','.')),lo=parseFloat((c[oi]||'').replace(',','.'));
+          if(!isNaN(la)&&!isNaN(lo))found.push({lat:la,lon:lo});}
+      }
+      if(!found.length){toast('Aucun radar lu dans le fichier.');return;}
+      radars=found;saveRadars();drawRadars();
+      $('radarInfo').textContent=radars.length+' radar(s) chargé(s).';toast(radars.length+' radars importés.');
+    }catch(e){toast('Fichier illisible : '+e.message);}};
+    rd.readAsText(file);
+  }
+
+  // ---------- Panneaux ----------
+  function openPanel(id){$(id).classList.add('open');if(id==='mapPanel'){setTimeout(()=>{initMap();drawRadars();if(destPos&&routeLine)map.fitBounds(routeLine.getBounds(),{padding:[40,40]});},60);startGeo();}}
+  function closePanel(id){$(id).classList.remove('open');}
+  function initMap(){if(map){map.invalidateSize();return;}map=L.map('map',{zoomControl:false,attributionControl:false}).setView([48.0,0.2],13);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19}).addTo(map);drawRadars();}
+
+  // ---------- Bilan ----------
+  async function endSession(){
+    openPanel('endPanel');
+    const mins=drive.startedAt?Math.round((Date.now()-drive.startedAt)/60000):0;
+    let stats='<div class="stat"><span>Durée</span><b>'+mins+' min</b></div>'
+      +'<div class="stat"><span>Vitesse max (GPS)</span><b>'+drive.maxSpeed+' km/h</b></div>'
+      +'<div class="stat"><span>Alertes vitesse</span><b>'+drive.alerts+'</b></div>';
+    $('endBody').innerHTML='<p class="hint">Je prépare ton bilan d\u2019anglais…</p>'+stats;
+    if(cfg.key&&history.length){try{
+      const tr=history.map(m=>(m.role==='user'?'User: ':'AI: ')+m.parts[0].text).join('\n');
+      const prompt='Analyse this English conversation. Return ONLY JSON {"grammar_errors":int,"new_words":[str],"strengths":[str],"next_focus":str,"encouragement":str}. encouragement = one warm sentence in French. Count errors from User turns only.\n\n'+tr;
+      const res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+GEMINI_MODEL+":generateContent?key="+encodeURIComponent(cfg.key),
+        {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:400,responseMimeType:"application/json"}})});
+      const data=await res.json();const s=JSON.parse((data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join(''));
+      $('endBody').innerHTML='<div class="stat"><span>Fautes de grammaire</span><b>'+(s.grammar_errors??'—')+'</b></div>'
+        +'<div class="stat"><span>Nouveaux mots</span><b>'+((s.new_words||[]).length)+'</b></div>'+stats
+        +((s.new_words||[]).length?'<p style="margin-top:12px"><b>À retenir :</b> '+s.new_words.join(', ')+'</p>':'')
+        +(s.next_focus?'<p style="margin-top:8px"><b>Prochain focus :</b> '+s.next_focus+'</p>':'')
+        +(s.encouragement?'<p style="margin-top:12px;color:var(--sloth)">'+s.encouragement+'</p>':'');
+      await updateMemory(tr);
+    }catch(e){$('endBody').innerHTML='<p class="hint">Bilan anglais indisponible ('+e.message+').</p>'+stats;}}
+    drive={maxSpeed:0,alerts:0,startedAt:null};
+  }
+  async function updateMemory(tr){
+    const prompt='From this conversation extract durable facts about the user. Return ONLY JSON {"profile":{"key":"value"},"frequent_errors":[str],"vocab_learned":[str]}. Short values.\n\n'+tr;
+    const res=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+GEMINI_MODEL+":generateContent?key="+encodeURIComponent(cfg.key),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{temperature:0.2,maxOutputTokens:300,responseMimeType:"application/json"}})});
+    const data=await res.json();const d=JSON.parse((data.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join(''));
+    Object.assign(memory.profile,d.profile||{});
+    (d.frequent_errors||[]).forEach(e=>{if(e&&!memory.frequent_errors.includes(e))memory.frequent_errors.push(e);});
+    (d.vocab_learned||[]).forEach(w=>{if(w&&!memory.vocab_learned.includes(w))memory.vocab_learned.push(w);});
+    memory.sessions.push({date:new Date().toISOString().slice(0,10)});saveMem();
+  }
+
+  // ---------- Branchements ----------
+  $('btnTalk').onclick=()=>convoActive?stopConvo():startConvo();
+  $('btnMap').onclick=()=>openPanel('mapPanel');
+  $('btnEnd').onclick=()=>endSession();
+  $('btnSettings').onclick=()=>openPanel('settingsPanel');
+  document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closePanel(b.dataset.close));
+  $('btnGo').onclick=()=>{const d=$('inpDest').value.trim();if(d)routeTo(d);};
+  $('btnAvoid').onclick=avoidHere; $('btnRadar').onclick=markRadar; $('btnClear').onclick=clearRoute;
+  $('inpRadarFile').onchange=e=>{if(e.target.files[0])importRadars(e.target.files[0]);};
+  $('btnSave').onclick=()=>{
+    cfg.key=$('inpKey').value.trim();cfg.level=$('inpLevel').value;cfg.limit=parseInt($('inpLimit').value,10)||50;
+    cfg.alert=$('inpAlert').checked;cfg.avoidHw=$('inpHw').checked;cfg.avoidToll=$('inpToll').checked;cfg.avoidFerry=$('inpFerry').checked;
+    saveCfg();refreshKeyBanner();$('limLabel').textContent=cfg.limit;$('lvlTag').textContent=cfg.level;
+    closePanel('settingsPanel');toast('Réglages enregistrés.');};
+
+  // ---------- Init ----------
+  $('inpKey').value=cfg.key;$('inpLevel').value=cfg.level;$('inpLimit').value=cfg.limit;$('inpAlert').checked=cfg.alert;
+  $('inpHw').checked=cfg.avoidHw;$('inpToll').checked=cfg.avoidToll;$('inpFerry').checked=cfg.avoidFerry;
+  $('limLabel').textContent=cfg.limit;$('lvlTag').textContent=cfg.level;
+  if(radars.length)$('radarInfo').textContent=radars.length+' radar(s) en mémoire.';
+  const mc=Object.keys(memory.profile||{}).length;$('memInfo').textContent=mc?('Mémoire : '+mc+' info(s) retenue(s).'):'Mémoire vide pour l\u2019instant.';
+  refreshKeyBanner();
+  if('speechSynthesis'in window)speechSynthesis.onvoiceschanged=()=>{};
+  </script>
+</body>
+</html>
