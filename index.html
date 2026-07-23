@@ -315,14 +315,54 @@
     history.push({role:'user',parts:[{text}]});
     if(history.length>24)history=history.slice(-24);
     let out;
-    try{out=await askGemini();}
+    try{out=await askGemini(text);}
     catch(err){toast('Gemini : '+err.message);setState('idle');if(convoActive)listen();return;}
     history.push({role:'model',parts:[{text:out.say}]});
     handleAction(out);
     caption('Compagnon',out.say);setState('speaking');
     speak(out.say,'en-US',()=>{if(convoActive)listen();else setState('idle');});}
 
-  async function askGemini(){
+  /* Le modèle enrobe parfois son JSON de texte ou de ``` : on l'extrait quand même. */
+  function extractJson(raw){
+    if(!raw)return null;
+    let s=raw.replace(/```json/gi,'```');
+    const f=s.indexOf('```');
+    if(f>=0){const e=s.indexOf('```',f+3);if(e>f)s=s.slice(f+3,e);}
+    const a=s.indexOf('{'),b=s.lastIndexOf('}');
+    if(a<0||b<=a)return null;
+    try{return JSON.parse(s.slice(a,b+1));}catch(e){return null;}}
+
+  /* Si tout échoue, on ne lit jamais du JSON à voix haute : on en sort la phrase. */
+  function clean(t){
+    if(!t)return '';
+    let s=t.replace(/```[a-z]*/gi,'').trim();
+    const m=s.match(/"say"\s*:\s*"((?:[^"\\]|\\.)*)"/);
+    if(m)return m[1].replace(/\\"/g,'"').replace(/\\n/g,' ').trim();
+    return s.replace(/^\s*(here is|voici)[^:]{0,40}:\s*/i,'').trim();}
+
+  /* Filet de sécurité : les ordres sont aussi détectés localement, sans dépendre du JSON. */
+  function detectCommand(t){
+    const s=' '+(t||'').toLowerCase()+' ';
+    if(/(radar|speed camera)/.test(s))return{action:'mark_radar'};
+    if(/(bloqu|bouchon|embouteill|blocked|traffic jam|jam ahead)/.test(s))return{action:'reroute_avoid'};
+    if(/(cancel the route|clear the route|annule)/.test(s))return{action:'clear_route'};
+    if(/(on foot|walking|à pied|a pied)/.test(s))return{action:'set_mode',mode:'pedestrian'};
+    if(/(by bike|cycling|bicycle|vélo|velo)/.test(s))return{action:'set_mode',mode:'bicycle'};
+    if(/(by car|en voiture)/.test(s))return{action:'set_mode',mode:'auto'};
+    let m=s.match(/(?:take me to|drive me to|navigate to|let's go to|emmène[- ]moi (?:à|au|aux)|emmene[- ]moi (?:a|au|aux))\s+([^,.!?]{2,60})/);
+    if(m)return{action:'navigate',destination:m[1].trim()};
+    m=s.match(/(?:starting from|start from|leaving from|je pars de|départ de|depart de)\s+([^,.!?]{2,60})/);
+    if(m)return{action:'set_start',destination:m[1].trim()};
+    return null;}
+
+  let jsonFails=0,plainMode=false;
+  async function askGemini(userText){
+    const local=detectCommand(userText);
+    if(plainMode){
+      const data=await callGemini({systemInstruction:{parts:[{text:systemPrompt()+
+        "\n\nIMPORTANT: reply with ONLY your short spoken sentence. No JSON, no labels, no code fences."}]},
+        contents:history,generationConfig:{temperature:0.7,maxOutputTokens:220}});
+      return Object.assign({say:clean(textOf(data))||"Sorry, could you say that again?",action:'none'},local||{});}
     const body={systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
       generationConfig:{temperature:0.7,maxOutputTokens:260,responseMimeType:"application/json",
         responseSchema:{type:"object",properties:{
@@ -330,8 +370,12 @@
           action:{type:"string",enum:["none","navigate","set_start","reroute_avoid","mark_radar","clear_route","set_mode"]},
           destination:{type:"string"},mode:{type:"string"}},required:["say","action"]}}};
     const data=await callGemini(body);const raw=textOf(data);
-    try{const o=JSON.parse(raw);if(!o.say)throw 0;return o;}
-    catch(e){return{say:raw||"Sorry, could you say that again?",action:"none"};}}
+    const o=extractJson(raw);
+    if(o&&o.say){jsonFails=0;o.say=clean(o.say);
+      if(!o.action||o.action==='none')Object.assign(o,local||{});return o;}
+    jsonFails++;
+    if(jsonFails>=2)plainMode=true;   // le modèle ne sait pas faire de JSON : on passe en texte simple
+    return Object.assign({say:clean(raw)||"Sorry, could you say that again?",action:'none'},local||{});}
 
   function handleAction(o){
     switch(o.action){
