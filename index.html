@@ -265,24 +265,40 @@
   function refreshKeyBanner(){$('keyBanner').classList.toggle('show',!cfg.key);}
 
   // ---------- Gemini ----------
+  /* Le nom du réglage "réflexion minimale" varie selon la version de l'API.
+     On essaie les formes connues une seule fois et on retient celle qui marche. */
+  const THINK_SHAPES=[
+    g=>{g.thinking={thinking_level:"minimal"};},
+    g=>{g.thinking_level="minimal";},
+    g=>{g.thinkingConfig={thinkingLevel:"MINIMAL"};},
+    g=>{}
+  ];
+  let thinkIdx=parseInt(S.getItem('sd_think')||'0',10);
+  if(!(thinkIdx>=0&&thinkIdx<THINK_SHAPES.length))thinkIdx=0;
+  let geminiBusy=false;
+
   async function callGemini(body){
     if(!cfg.key)throw new Error('clé manquante');
     let lastErr='';
     for(let i=modelIdx;i<MODELS.length;i++){
-      for(let attempt=0;attempt<2;attempt++){
+      for(let s=0;s<THINK_SHAPES.length;s++){
+        const b=JSON.parse(JSON.stringify(body));
+        b.generationConfig=b.generationConfig||{};
+        THINK_SHAPES[thinkIdx](b.generationConfig);
         let data;
         try{
           const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+MODELS[i]+":generateContent?key="+encodeURIComponent(cfg.key),
-            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+            {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
           data=await r.json();
         }catch(e){lastErr=e.message;break;}
         if(data.error){
           lastErr=data.error.message||'erreur API';
-          if(attempt===0&&body.generationConfig&&'thinking_level'in body.generationConfig
-             &&/thinking|unknown name|invalid/i.test(lastErr)){delete body.generationConfig.thinking_level;continue;}
+          if(/thinking|unknown name|unrecognized|invalid/i.test(lastErr)&&thinkIdx<THINK_SHAPES.length-1){
+            thinkIdx++;S.setItem('sd_think',String(thinkIdx));continue;}
           if(/no longer available|not found|not supported|unsupported/i.test(lastErr))break;
           throw new Error(lastErr);}
         if(i!==modelIdx){modelIdx=i;S.setItem('sd_model',String(i));}
+        S.setItem('sd_think',String(thinkIdx));
         return data;}}
     throw new Error(lastErr||'aucun modèle disponible');}
   function textOf(d){return (d.candidates?.[0]?.content?.parts||[]).map(p=>p.text||'').join('').trim();}
@@ -317,9 +333,12 @@
 
   async function askGemini(userText){
     const local=detectCommand(userText);
-    const data=await callGemini({systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
-      generationConfig:{maxOutputTokens:200,thinking_level:"minimal"}});
-    return Object.assign({say:clean(textOf(data))||"Sorry, could you say that again?",action:'none'},local||{});}
+    geminiBusy=true;
+    try{
+      const data=await callGemini({systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
+        generationConfig:{maxOutputTokens:140}});
+      return Object.assign({say:clean(textOf(data))||"Sorry, could you say that again?",action:'none'},local||{});
+    }finally{geminiBusy=false;}}
 
   // ---------- Voix ----------
   function speak(text,lang,done){
@@ -348,13 +367,14 @@
   async function onUserSpeech(text){
     caption('Toi',text);setState('thinking');
     history.push({role:'user',parts:[{text}]});
-    if(history.length>24)history=history.slice(-24);
-    let out;
+    if(history.length>12)history=history.slice(-12);
+    let out;const t0=performance.now();
     try{out=await askGemini(text);}
     catch(err){toast('Gemini : '+err.message);setState('idle');if(convoActive)listen();return;}
+    const secs=((performance.now()-t0)/1000).toFixed(1);
     history.push({role:'model',parts:[{text:out.say}]});
     handleAction(out);
-    caption('Compagnon',out.say);setState('speaking');
+    caption('Compagnon · '+secs+' s',out.say);setState('speaking');
     speak(out.say,'en-US',()=>{if(convoActive)listen();else setState('idle');});}
 
   function handleAction(o){
@@ -403,14 +423,17 @@
     const m=s.match(/(\d+)/);if(!m)return null;
     let v=parseInt(m[1],10);if(/mph/.test(s))v=Math.round(v*1.609);
     return v>0&&v<=150?v:null;}
+  const ROADS='motorway|trunk|primary|secondary|tertiary|unclassified|residential|living_street'
+    +'|motorway_link|trunk_link|primary_link|secondary_link|tertiary_link';
   async function refreshLimits(){
-    if(!lastPos||!cfg.useOsm)return;
+    if(!lastPos||!cfg.useOsm||geminiBusy)return;   // jamais pendant une réponse : la 4G reste libre
     const now=Date.now();
-    if(limitCache.pos&&dist(limitCache.pos,lastPos)<350&&now-limitCache.at<60000)return;
+    if(limitCache.pos&&dist(limitCache.pos,lastPos)<450&&now-limitCache.at<90000)return;
     limitCache.at=now;limitCache.pos={lat:lastPos.lat,lon:lastPos.lon};
-    const q='[out:json][timeout:8];way(around:600,'+lastPos.lat.toFixed(5)+','+lastPos.lon.toFixed(5)+')[highway];out tags geom;';
+    const q='[out:json][timeout:6];way(around:450,'+lastPos.lat.toFixed(5)+','+lastPos.lon.toFixed(5)
+      +')[highway~"^('+ROADS+')$"];out tags geom;';
     try{
-      const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),9000);
+      const ctrl=new AbortController();const to=setTimeout(()=>ctrl.abort(),7000);
       const r=await fetch('https://overpass-api.de/api/interpreter',{method:'POST',
         headers:{'Content-Type':'application/x-www-form-urlencoded'},body:'data='+encodeURIComponent(q),signal:ctrl.signal});
       clearTimeout(to);
@@ -651,7 +674,7 @@
       const tr=history.map(m=>(m.role==='user'?'User: ':'AI: ')+m.parts[0].text).join('\n');
       const data=await callGemini({contents:[{role:'user',parts:[{text:
         'Analyse this English conversation. Return ONLY JSON {"grammar_errors":int,"new_words":[str],"next_focus":str,"encouragement":str}. encouragement = one warm sentence in French. Count errors from User turns only.\n\n'+tr}]}],
-        generationConfig:{maxOutputTokens:500,thinking_level:"minimal",responseMimeType:"application/json"}});
+        generationConfig:{maxOutputTokens:500,responseMimeType:"application/json"}});
       const s=extractJson(textOf(data));
       if(!s)throw new Error('réponse illisible');
       $('endBody').innerHTML='<div class="stat"><span>Fautes de grammaire</span><b>'+(s.grammar_errors??'—')+'</b></div>'
@@ -666,7 +689,7 @@
   async function updateMemory(tr){
     const data=await callGemini({contents:[{role:'user',parts:[{text:
       'From this conversation extract durable facts about the user. Return ONLY JSON {"profile":{"key":"value"},"frequent_errors":[str],"vocab_learned":[str]}. Short values.\n\n'+tr}]}],
-      generationConfig:{maxOutputTokens:400,thinking_level:"minimal",responseMimeType:"application/json"}});
+      generationConfig:{maxOutputTokens:400,responseMimeType:"application/json"}});
     const d=extractJson(textOf(data));
     if(!d)return;
     Object.assign(memory.profile,d.profile||{});
