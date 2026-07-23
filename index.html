@@ -168,6 +168,13 @@
           <select id="inpLevel"><option value="A1">A1 — débutant</option><option value="A2">A2 — élémentaire</option><option value="B1">B1 — intermédiaire</option><option value="B2">B2 — avancé</option></select></div>
         <div><label>Tolérance (km/h)</label><input type="number" id="inpTol" value="5" min="0" max="20" step="1"></div>
       </div>
+      <div class="row">
+        <div><label>Langue du micro</label>
+          <select id="inpMic"><option value="en-US">Anglais (pratique)</option><option value="fr-FR">Français</option></select></div>
+        <div><label>Patience avant réponse (s)</label><input type="number" id="inpPause" value="2.5" min="1" max="8" step="0.5"></div>
+      </div>
+      <p class="hint">La patience = le silence que j'attends avant de répondre. Augmente-la si je te coupe quand tu reprends ton souffle.</p>
+      <div class="switch"><span>Réponses rapides (modèle léger)</span><input type="checkbox" id="inpFast" checked></div>
       <div class="switch"><span>Limites réelles de chaque route</span><input type="checkbox" id="inpOsm" checked></div>
       <div><label>Limite de secours si la route est inconnue (km/h)</label><input type="number" id="inpLimit" value="80" min="10" max="140" step="5"></div>
       <div class="switch"><span>Alerte vocale de vitesse</span><input type="checkbox" id="inpAlert" checked></div>
@@ -204,11 +211,13 @@
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
   "use strict";
-  const MODELS=["gemini-3.5-flash","gemini-3.1-flash-lite","gemini-2.5-flash"];
-  let modelIdx=parseInt(localStorage.getItem('sd_model')||'0',10);
-  if(!(modelIdx>=0&&modelIdx<MODELS.length))modelIdx=0;
   const $=id=>document.getElementById(id);
   const S=localStorage;
+  const FAST=["gemini-3.1-flash-lite","gemini-3.5-flash","gemini-2.5-flash"];
+  const RICH=["gemini-3.5-flash","gemini-3.1-flash-lite","gemini-2.5-flash"];
+  let MODELS=(S.getItem('sd_fast')!=='0')?FAST:RICH;
+  let modelIdx=parseInt(S.getItem('sd_model')||'0',10);
+  if(!(modelIdx>=0&&modelIdx<MODELS.length))modelIdx=0;
 
   const cfg={
     key:S.getItem('sd_key')||'', level:S.getItem('sd_level')||'A1',
@@ -217,12 +226,14 @@
     guide:S.getItem('sd_guide')!=='0', reroute:S.getItem('sd_reroute')!=='0',
     follow:S.getItem('sd_follow')!=='0', avoidHw:S.getItem('sd_hw')==='1',
     avoidToll:S.getItem('sd_toll')!=='0', avoidFerry:S.getItem('sd_ferry')!=='0',
-    mode:S.getItem('sd_mode')||'auto'};
+    mode:S.getItem('sd_mode')||'auto', fast:S.getItem('sd_fast')!=='0',
+    pause:parseInt(S.getItem('sd_pause')||'2500',10), micLang:S.getItem('sd_mic')||'en-US'};
   function saveCfg(){S.setItem('sd_key',cfg.key);S.setItem('sd_level',cfg.level);S.setItem('sd_limit',String(cfg.limit));
     S.setItem('sd_tol',String(cfg.tol));S.setItem('sd_osm',cfg.useOsm?'1':'0');S.setItem('sd_alert',cfg.alert?'1':'0');
     S.setItem('sd_guide',cfg.guide?'1':'0');S.setItem('sd_reroute',cfg.reroute?'1':'0');S.setItem('sd_follow',cfg.follow?'1':'0');
     S.setItem('sd_hw',cfg.avoidHw?'1':'0');S.setItem('sd_toll',cfg.avoidToll?'1':'0');S.setItem('sd_ferry',cfg.avoidFerry?'1':'0');
-    S.setItem('sd_mode',cfg.mode);}
+    S.setItem('sd_mode',cfg.mode);S.setItem('sd_fast',cfg.fast?'1':'0');
+    S.setItem('sd_pause',String(cfg.pause));S.setItem('sd_mic',cfg.micLang);}
 
   let memory;try{memory=JSON.parse(S.getItem('sd_memory'));}catch(e){}
   if(!memory)memory={profile:{},frequent_errors:[],vocab_learned:[],sessions:[]};
@@ -331,15 +342,6 @@
     if(m)return{action:'set_start',destination:m[1].trim()};
     return null;}
 
-  async function askGemini(userText){
-    const local=detectCommand(userText);
-    geminiBusy=true;
-    try{
-      const data=await callGemini({systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
-        generationConfig:{maxOutputTokens:140}});
-      return Object.assign({say:clean(textOf(data))||"Sorry, could you say that again?",action:'none'},local||{});
-    }finally{geminiBusy=false;}}
-
   // ---------- Voix ----------
   function speak(text,lang,done){
     if(!('speechSynthesis'in window)){if(done)done();return;}
@@ -351,31 +353,108 @@
     const was=convoActive;stopRecog();setState('alert');caption('Copilote',textFr);
     speak(textFr,'fr-FR',()=>{if(was)listen();else setState('idle');});}
 
+  /* File d'attente vocale : on peut parler la 1re phrase pendant que la suite arrive. */
+  let spkPending=0,spkFinished=false,spkDone=null;
+  function spkStart(){try{if('speechSynthesis'in window)speechSynthesis.cancel();}catch(e){}
+    spkPending=0;spkFinished=false;spkDone=null;}
+  function spkAdd(text,lang){
+    if(!text||!('speechSynthesis'in window))return;
+    const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=0.98;
+    const v=(speechSynthesis.getVoices()||[]).find(v=>v.lang&&v.lang.startsWith(lang.slice(0,2)));if(v)u.voice=v;
+    spkPending++;
+    const fin=()=>{spkPending--;if(spkFinished&&spkPending<=0&&spkDone){const d=spkDone;spkDone=null;d();}};
+    u.onend=fin;u.onerror=fin;
+    speechSynthesis.speak(u);}
+  function spkEnd(done){spkFinished=true;spkDone=done;
+    if(spkPending<=0){spkDone=null;done();}}
+
+  /* Réponse en flux : chaque phrase terminée part immédiatement à la voix. */
+  async function streamGemini(body,onSentence){
+    const b=JSON.parse(JSON.stringify(body));
+    b.generationConfig=b.generationConfig||{};
+    THINK_SHAPES[thinkIdx](b.generationConfig);
+    const r=await fetch("https://generativelanguage.googleapis.com/v1beta/models/"+MODELS[modelIdx]
+      +":streamGenerateContent?alt=sse&key="+encodeURIComponent(cfg.key),
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+    if(!r.ok||!r.body)throw new Error('flux indisponible');
+    const reader=r.body.getReader(),dec=new TextDecoder();
+    let buf='',full='',pend='';
+    for(;;){
+      const {done,value}=await reader.read();
+      if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      const lines=buf.split('\n');buf=lines.pop();
+      for(const ln of lines){
+        if(!ln.startsWith('data:'))continue;
+        const p=ln.slice(5).trim();
+        if(!p||p==='[DONE]')continue;
+        let j;try{j=JSON.parse(p);}catch(e){continue;}
+        if(j.error)throw new Error(j.error.message||'erreur API');
+        const t=(j.candidates?.[0]?.content?.parts||[]).map(x=>x.text||'').join('');
+        if(!t)continue;
+        full+=t;pend+=t;
+        let m;
+        while((m=pend.match(/^([\s\S]*?[.!?])(\s+|$)/))){
+          if(!m[0].length)break;
+          const s=m[1].trim();pend=pend.slice(m[0].length);
+          if(s.length>1)onSentence(s,full);
+        }}}
+    if(pend.trim())onSentence(pend.trim(),full);
+    return full;}
+
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  function buildRecog(){if(!SR)return null;const r=new SR();r.lang='en-US';r.continuous=false;
-    r.interimResults=true;r.maxAlternatives=1;
+  let sttBuf='',sttTimer=null;
+  function buildRecog(){
+    if(!SR)return null;
+    const r=new SR();r.lang=cfg.micLang;r.continuous=true;r.interimResults=true;r.maxAlternatives=1;
     r.onstart=()=>{recogRunning=true;};
-    r.onresult=e=>{const res=e.results[e.results.length-1];const t=res[0].transcript;
-      if(res.isFinal){const c=t.trim();if(c){stopRecog();onUserSpeech(c);}}else caption('Toi',t);};
+    r.onresult=e=>{
+      let interim='';
+      for(let i=e.resultIndex;i<e.results.length;i++){
+        const res=e.results[i];
+        if(res.isFinal)sttBuf+=(sttBuf?' ':'')+res[0].transcript.trim();
+        else interim+=res[0].transcript;}
+      const shown=(sttBuf+' '+interim).trim();
+      if(shown)caption('Toi',shown);
+      clearTimeout(sttTimer);                     // tant que tu parles, rien ne part
+      sttTimer=setTimeout(flushSpeech,cfg.pause); // on n'envoie qu'après un vrai silence
+    };
     r.onerror=e=>{if(e.error==='not-allowed'||e.error==='service-not-allowed'){toast('Micro refusé.');stopConvo();}};
     r.onend=()=>{recogRunning=false;if(convoActive&&appState==='listening'){try{r.start();}catch(_){}}};
     return r;}
+  function flushSpeech(){
+    clearTimeout(sttTimer);
+    const t=sttBuf.trim();sttBuf='';
+    if(!t||appState!=='listening')return;
+    stopRecog();onUserSpeech(t);}
   function startRecog(){if(recog){try{recog.start();}catch(_){}}}
-  function stopRecog(){if(recog&&recogRunning){try{recog.stop();}catch(_){}}}
-  function listen(){if(!convoActive)return;setState('listening');startRecog();}
+  function stopRecog(){clearTimeout(sttTimer);if(recog&&recogRunning){try{recog.stop();}catch(_){}}}
+  function listen(){if(!convoActive)return;sttBuf='';clearTimeout(sttTimer);setState('listening');startRecog();}
 
   async function onUserSpeech(text){
     caption('Toi',text);setState('thinking');
+    const local=detectCommand(text);
+    if(local)handleAction(local);          // l'ordre GPS part tout de suite, sans attendre l'IA
     history.push({role:'user',parts:[{text}]});
     if(history.length>12)history=history.slice(-12);
-    let out;const t0=performance.now();
-    try{out=await askGemini(text);}
-    catch(err){toast('Gemini : '+err.message);setState('idle');if(convoActive)listen();return;}
-    const secs=((performance.now()-t0)/1000).toFixed(1);
-    history.push({role:'model',parts:[{text:out.say}]});
-    handleAction(out);
-    caption('Compagnon · '+secs+' s',out.say);setState('speaking');
-    speak(out.say,'en-US',()=>{if(convoActive)listen();else setState('idle');});}
+    const body={systemInstruction:{parts:[{text:systemPrompt()}]},contents:history,
+      generationConfig:{maxOutputTokens:140}};
+    const t0=performance.now();let firstAt=null,full='';
+    geminiBusy=true;spkStart();
+    try{
+      full=await streamGemini(body,(sentence,sofar)=>{
+        if(firstAt===null){firstAt=((performance.now()-t0)/1000).toFixed(1);setState('speaking');}
+        caption('Compagnon · '+firstAt+' s',clean(sofar));
+        spkAdd(clean(sentence),'en-US');});
+    }catch(e){
+      try{const d=await callGemini(body);full=textOf(d);}
+      catch(err){geminiBusy=false;toast('Gemini : '+err.message);setState('idle');if(convoActive)listen();return;}
+      const secs=((performance.now()-t0)/1000).toFixed(1);
+      setState('speaking');caption('Compagnon · '+secs+' s',clean(full));spkAdd(clean(full),'en-US');}
+    geminiBusy=false;
+    const say=clean(full)||"Sorry, could you say that again?";
+    history.push({role:'model',parts:[{text:say}]});
+    spkEnd(()=>{if(convoActive)listen();else setState('idle');});}
 
   function handleAction(o){
     switch(o.action){
@@ -720,7 +799,13 @@
     cfg.useOsm=$('inpOsm').checked;cfg.alert=$('inpAlert').checked;cfg.guide=$('inpGuide').checked;
     cfg.reroute=$('inpReroute').checked;cfg.follow=$('inpFollow').checked;follow=cfg.follow;
     cfg.avoidHw=$('inpHw').checked;cfg.avoidToll=$('inpToll').checked;cfg.avoidFerry=$('inpFerry').checked;
+    const p=parseFloat($('inpPause').value);cfg.pause=isNaN(p)?2500:Math.round(p*1000);
+    const oldMic=cfg.micLang,oldFast=cfg.fast;
+    cfg.micLang=$('inpMic').value;cfg.fast=$('inpFast').checked;
+    if(cfg.micLang!==oldMic){stopRecog();recog=null;}        // le micro doit être recréé
+    if(cfg.fast!==oldFast){MODELS=cfg.fast?FAST:RICH;modelIdx=0;S.setItem('sd_model','0');}
     saveCfg();refreshKeyBanner();$('lvlTag').textContent=cfg.level;
+    $('modelInfo').textContent='Modèle : '+MODELS[modelIdx]+' · limites de vitesse : OpenStreetMap.';
     limitCache={pos:null,at:0,ways:[]};
     if(destPos)computeRoute();closePanel('settingsPanel');toast('Réglages enregistrés.');};
 
@@ -728,6 +813,7 @@
   $('inpKey').value=cfg.key;$('inpLevel').value=cfg.level;$('inpLimit').value=cfg.limit;$('inpTol').value=cfg.tol;
   $('inpOsm').checked=cfg.useOsm;$('inpAlert').checked=cfg.alert;$('inpGuide').checked=cfg.guide;
   $('inpReroute').checked=cfg.reroute;$('inpFollow').checked=cfg.follow;
+  $('inpMic').value=cfg.micLang;$('inpPause').value=(cfg.pause/1000).toFixed(1);$('inpFast').checked=cfg.fast;
   $('inpHw').checked=cfg.avoidHw;$('inpToll').checked=cfg.avoidToll;$('inpFerry').checked=cfg.avoidFerry;
   $('lvlTag').textContent=cfg.level;
   document.querySelectorAll('.modes button').forEach(b=>b.classList.toggle('on',b.dataset.mode===cfg.mode));
