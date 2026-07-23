@@ -70,6 +70,11 @@
   #controls{flex:0 0 auto;padding:8px 10px calc(8px + env(safe-area-inset-bottom));
     display:flex;flex-direction:column;gap:7px}
   body.driving #controls .io-row,body.driving #controls .modes{display:none}
+  #chatRow{display:none}
+  body.discreet #chatRow{display:flex}
+  body.discreet #btnTalk{display:none}
+  body.discreet .hud-caption{max-height:52%;overflow-y:auto;font-size:16px}
+  body.discreet .hud-orb{display:none}
   .io-row{display:flex;gap:7px;align-items:center}
   .io-row .tag{font-size:11px;color:var(--muted);width:20px;text-align:center;flex:0 0 20px}
   input,select{width:100%;background:var(--surface);border:1px solid var(--line);color:var(--text);
@@ -120,6 +125,7 @@
   <header>
     <div class="brand">🦥 SlothDrive <small id="lvlTag">A1</small></div>
     <div class="hbtns">
+      <button class="chip" id="btnDiscreet">🤫</button>
       <button class="chip" id="btnHist">📖</button>
       <button class="chip" id="btnFull">⛶ Plein écran</button>
       <button class="chip" id="btnSettings">⚙︎</button>
@@ -147,6 +153,7 @@
       <button data-mode="pedestrian">🚶 Marche</button>
       <button data-mode="bicycle">🚲 Vélo</button>
     </div>
+    <div class="io-row" id="chatRow"><input id="inpChat" placeholder="Écris en anglais…"><button class="btn-go" id="btnSend">Envoyer</button></div>
     <button class="primary" id="btnTalk">Démarrer la conversation</button>
     <div class="mini-row">
       <button id="btnAvoid">🚧 Éviter</button>
@@ -182,6 +189,7 @@
       <p class="hint">La patience = le silence que j'attends avant de répondre. Augmente-la si je te coupe quand tu reprends ton souffle.</p>
       <div class="switch"><span>Réponses rapides (modèle léger)</span><input type="checkbox" id="inpFast" checked></div>
       <div class="switch"><span>Niveau automatique (je monte avec toi)</span><input type="checkbox" id="inpAuto" checked></div>
+      <div class="switch"><span>Mode discret : parler dans le casque</span><input type="checkbox" id="inpDVoice" checked></div>
       <div class="switch"><span>Limites réelles de chaque route</span><input type="checkbox" id="inpOsm" checked></div>
       <div><label>Limite de secours si la route est inconnue (km/h)</label><input type="number" id="inpLimit" value="80" min="10" max="140" step="5"></div>
       <div class="switch"><span>Alerte vocale de vitesse</span><input type="checkbox" id="inpAlert" checked></div>
@@ -240,13 +248,14 @@
     avoidToll:S.getItem('sd_toll')!=='0', avoidFerry:S.getItem('sd_ferry')!=='0',
     mode:S.getItem('sd_mode')||'auto', fast:S.getItem('sd_fast')!=='0',
     pause:parseInt(S.getItem('sd_pause')||'2500',10), micLang:S.getItem('sd_mic')||'en-US',
-    name:S.getItem('sd_name')||'', autoLevel:S.getItem('sd_auto')!=='0'};
+    name:S.getItem('sd_name')||'', autoLevel:S.getItem('sd_auto')!=='0',
+    dVoice:S.getItem('sd_dvoice')!=='0'};
   function saveCfg(){S.setItem('sd_key',cfg.key);S.setItem('sd_level',cfg.level);S.setItem('sd_limit',String(cfg.limit));
     S.setItem('sd_tol',String(cfg.tol));S.setItem('sd_osm',cfg.useOsm?'1':'0');S.setItem('sd_alert',cfg.alert?'1':'0');
     S.setItem('sd_guide',cfg.guide?'1':'0');S.setItem('sd_reroute',cfg.reroute?'1':'0');S.setItem('sd_follow',cfg.follow?'1':'0');
     S.setItem('sd_hw',cfg.avoidHw?'1':'0');S.setItem('sd_toll',cfg.avoidToll?'1':'0');S.setItem('sd_ferry',cfg.avoidFerry?'1':'0');
     S.setItem('sd_mode',cfg.mode);S.setItem('sd_fast',cfg.fast?'1':'0');
-    S.setItem('sd_pause',String(cfg.pause));S.setItem('sd_mic',cfg.micLang);S.setItem('sd_name',cfg.name);S.setItem('sd_auto',cfg.autoLevel?'1':'0');}
+    S.setItem('sd_pause',String(cfg.pause));S.setItem('sd_mic',cfg.micLang);S.setItem('sd_name',cfg.name);S.setItem('sd_auto',cfg.autoLevel?'1':'0');S.setItem('sd_dvoice',cfg.dVoice?'1':'0');}
 
   let memory;try{memory=JSON.parse(S.getItem('sd_memory'));}catch(e){}
   if(!memory)memory={profile:{},frequent_errors:[],vocab_learned:[],sessions:[]};
@@ -255,7 +264,7 @@
   if(!Array.isArray(radars))radars=[];
   function saveRadars(){try{S.setItem('sd_radars',JSON.stringify(radars));}catch(e){toast('Stockage plein.');}}
 
-  let convoActive=false,appState='idle',history=[];
+  let convoActive=false,appState='idle',history=[],discreet=false;
   let recog=null,recogRunning=false;
   let drive={maxSpeed:0,alerts:0,startedAt:null};
   let lastAlertAt=0,lastRadarWarn=0,lastPos=null,startPos=null,destPos=null,avoidPoints=[];
@@ -396,6 +405,7 @@
     spkPending=0;spkFinished=false;spkDone=null;}
   function spkAdd(text,lang){
     if(!text||!('speechSynthesis'in window))return;
+    if(discreet&&!cfg.dVoice)return;          // mode discret silencieux
     const u=new SpeechSynthesisUtterance(text);u.lang=lang;u.rate=lang==='fr-FR'?1.05:(RATE[cfg.level]||0.95);
     const v=(speechSynthesis.getVoices()||[]).find(v=>v.lang&&v.lang.startsWith(lang.slice(0,2)));if(v)u.voice=v;
     spkPending++;
@@ -924,6 +934,18 @@
   $('btnTalk').onclick=()=>convoActive?stopConvo():startConvo();
   $('btnSettings').onclick=()=>openPanel('settingsPanel');
   $('btnHist').onclick=()=>{renderHistory();openPanel('histPanel');};
+  $('btnDiscreet').onclick=()=>{
+    discreet=!discreet;document.body.classList.toggle('discreet',discreet);
+    if(discreet){if(convoActive)stopConvo();setState('idle');
+      caption('Mode discret','Écris ta phrase en anglais. Je réponds ici'+(cfg.dVoice?' et dans ton casque.':' , sans un bruit.'));
+      toast('Mode discret activé.');}
+    else{caption('Compagnon','Mode discret coupé. Appuie sur « Démarrer » pour parler.');toast('Mode vocal.');}};
+  function sendTyped(){
+    const t=$('inpChat').value.trim();if(!t)return;
+    if(!cfg.key){openPanel('settingsPanel');toast('Ajoute ta clé Gemini.');return;}
+    $('inpChat').value='';drive.startedAt=drive.startedAt||Date.now();onUserSpeech(t);}
+  $('btnSend').onclick=sendTyped;
+  $('inpChat').addEventListener('keydown',e=>{if(e.key==='Enter')sendTyped();});
   $('btnFull').onclick=toggleFull;
   $('btnEnd').onclick=endSession;
   $('btnRecenter').onclick=recenter;
@@ -947,7 +969,7 @@
     const p=parseFloat($('inpPause').value);cfg.pause=isNaN(p)?2500:Math.round(p*1000);
     const oldMic=cfg.micLang,oldFast=cfg.fast;
     cfg.micLang=$('inpMic').value;cfg.fast=$('inpFast').checked;cfg.name=$('inpName').value.trim();
-    cfg.autoLevel=$('inpAuto').checked;
+    cfg.autoLevel=$('inpAuto').checked;cfg.dVoice=$('inpDVoice').checked;
     if(cfg.micLang!==oldMic){stopRecog();recog=null;}        // le micro doit être recréé
     if(cfg.fast!==oldFast){MODELS=cfg.fast?FAST:RICH;modelIdx=0;S.setItem('sd_model','0');}
     saveCfg();refreshKeyBanner();$('lvlTag').textContent=cfg.level;
@@ -959,7 +981,7 @@
   $('inpKey').value=cfg.key;$('inpLevel').value=cfg.level;$('inpLimit').value=cfg.limit;$('inpTol').value=cfg.tol;
   $('inpOsm').checked=cfg.useOsm;$('inpAlert').checked=cfg.alert;$('inpGuide').checked=cfg.guide;
   $('inpReroute').checked=cfg.reroute;$('inpFollow').checked=cfg.follow;
-  $('inpAuto').checked=cfg.autoLevel;$('inpName').value=cfg.name;$('inpMic').value=cfg.micLang;$('inpPause').value=(cfg.pause/1000).toFixed(1);$('inpFast').checked=cfg.fast;
+  $('inpAuto').checked=cfg.autoLevel;$('inpDVoice').checked=cfg.dVoice;$('inpName').value=cfg.name;$('inpMic').value=cfg.micLang;$('inpPause').value=(cfg.pause/1000).toFixed(1);$('inpFast').checked=cfg.fast;
   $('inpHw').checked=cfg.avoidHw;$('inpToll').checked=cfg.avoidToll;$('inpFerry').checked=cfg.avoidFerry;
   $('lvlTag').textContent=cfg.level;
   document.querySelectorAll('.modes button').forEach(b=>b.classList.toggle('on',b.dataset.mode===cfg.mode));
