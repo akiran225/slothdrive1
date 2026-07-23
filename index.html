@@ -366,6 +366,7 @@
 
   function detectCommand(t){
     const s=' '+(t||'').toLowerCase()+' ';
+    if(/(remove|delete|forget|supprime|enlève|enleve|efface).{0,25}(radar|camera)/.test(s))return{action:'unmark_radar'};
     if(/(radar|speed camera)/.test(s))return{action:'mark_radar'};
     if(/(bloqu|bouchon|embouteill|blocked|traffic jam|jam ahead|avoid this)/.test(s))return{action:'reroute_avoid'};
     if(/(cancel the route|clear the route|annule)/.test(s))return{action:'clear_route'};
@@ -522,6 +523,7 @@
       case 'set_start': if(o.destination){$('inpStart').value=o.destination;setStart(o.destination);} break;
       case 'reroute_avoid': avoidHere(); break;
       case 'mark_radar': markRadar(); break;
+      case 'unmark_radar': unmarkRadar(); break;
       case 'clear_route': clearRoute(); break;
       case 'set_mode': if(['auto','pedestrian','bicycle'].includes(o.mode))setMode(o.mode,true); break;}}
 
@@ -663,6 +665,13 @@
     if(!lastPos){toast('Position inconnue.');return;}
     radars.push({lat:lastPos.lat,lon:lastPos.lon});saveRadars();drawRadars();
     $('radarInfo').textContent=radars.length+' radar(s) en mémoire.';toast('Radar noté ici.');}
+  function unmarkRadar(){
+    if(!lastPos||!radars.length){toast('Aucun radar à retirer.');return;}
+    let bi=-1,bd=Infinity;
+    radars.forEach((r,i)=>{const d=dist(lastPos,r);if(d<bd){bd=d;bi=i;}});
+    if(bi<0||bd>800){toast('Aucun radar proche à retirer.');return;}
+    radars.splice(bi,1);saveRadars();drawRadars();
+    $('radarInfo').textContent=radars.length+' radar(s) en mémoire.';toast('Radar retiré.');}
   function drawRadars(){
     if(!map)return;if(radarLayer)radarLayer.remove();radarLayer=L.layerGroup();
     radars.forEach(r=>L.circleMarker([r.lat,r.lon],{radius:5,color:'#E8A544',fillColor:'#E8A544',fillOpacity:.9}).addTo(radarLayer));
