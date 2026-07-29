@@ -158,6 +158,7 @@
     <div class="mini-row">
       <button id="btnAvoid">🚧 Éviter</button>
       <button id="btnRadar">📷 Radar</button>
+      <button id="btnLimit">🚦 Limite</button>
       <button id="btnClear">✕ Route</button>
       <button id="btnEnd">🏁 Bilan</button>
     </div>
@@ -190,6 +191,7 @@
       <div class="switch"><span>Réponses rapides (modèle léger)</span><input type="checkbox" id="inpFast" checked></div>
       <div class="switch"><span>Niveau automatique (je monte avec toi)</span><input type="checkbox" id="inpAuto" checked></div>
       <div class="switch"><span>Mode discret : parler dans le casque</span><input type="checkbox" id="inpDVoice" checked></div>
+      <div class="switch"><span>Traductions françaises à l'oral</span><input type="checkbox" id="inpTrans"></div>
       <div class="switch"><span>Limites réelles de chaque route</span><input type="checkbox" id="inpOsm" checked></div>
       <div><label>Limite de secours si la route est inconnue (km/h)</label><input type="number" id="inpLimit" value="80" min="10" max="140" step="5"></div>
       <div class="switch"><span>Alerte vocale de vitesse</span><input type="checkbox" id="inpAlert" checked></div>
@@ -201,6 +203,24 @@
       <div class="switch"><span>Éviter les autoroutes</span><input type="checkbox" id="inpHw"></div>
       <div class="switch"><span>Éviter les péages</span><input type="checkbox" id="inpToll" checked></div>
       <div class="switch"><span>Éviter les ferries / bacs</span><input type="checkbox" id="inpFerry" checked></div>
+
+      <div class="divider">Vitesses — panneaux officiels</div>
+      <div>
+        <label>Fichier officiel des panneaux de vitesse (CSV de ton département)</label>
+        <input type="file" id="inpSignFile" accept=".csv,text/csv">
+        <p class="hint" id="signInfo">Aucun panneau chargé.</p>
+        <p class="hint">Source : « Données de signalisation routière déterminant la Vitesse Maximale Autorisée » sur data.gouv.fr (Ministère de l'intérieur). Les fichiers sont par région : importe <b>PDL</b> (Pays de la Loire, ta Sarthe) puis <b>NMD</b> (Normandie, Rouen). Tu peux en importer plusieurs à la suite, ils s'ajoutent.</p>
+        <p class="hint" id="manualInfo"></p>
+        <button class="btn-go" id="btnSignClear" style="margin-top:8px;height:38px">Effacer panneaux et corrections</button>
+      </div>
+
+      <div class="divider">Sauvegarde</div>
+      <div>
+        <p class="hint">Enregistre ta mémoire, ton historique, tes radars et tes corrections de vitesse dans un fichier.</p>
+        <button class="btn-go" id="btnExport" style="margin-top:8px;height:38px;width:100%">Télécharger une sauvegarde</button>
+        <label style="margin-top:10px">Restaurer une sauvegarde</label>
+        <input type="file" id="inpBackup" accept=".json,application/json">
+      </div>
 
       <div class="divider">Radars — fichier officiel</div>
       <div>
@@ -249,13 +269,13 @@
     mode:S.getItem('sd_mode')||'auto', fast:S.getItem('sd_fast')!=='0',
     pause:parseInt(S.getItem('sd_pause')||'2500',10), micLang:S.getItem('sd_mic')||'en-US',
     name:S.getItem('sd_name')||'', autoLevel:S.getItem('sd_auto')!=='0',
-    dVoice:S.getItem('sd_dvoice')!=='0'};
+    dVoice:S.getItem('sd_dvoice')!=='0', trans:S.getItem('sd_trans')==='1'};
   function saveCfg(){S.setItem('sd_key',cfg.key);S.setItem('sd_level',cfg.level);S.setItem('sd_limit',String(cfg.limit));
     S.setItem('sd_tol',String(cfg.tol));S.setItem('sd_osm',cfg.useOsm?'1':'0');S.setItem('sd_alert',cfg.alert?'1':'0');
     S.setItem('sd_guide',cfg.guide?'1':'0');S.setItem('sd_reroute',cfg.reroute?'1':'0');S.setItem('sd_follow',cfg.follow?'1':'0');
     S.setItem('sd_hw',cfg.avoidHw?'1':'0');S.setItem('sd_toll',cfg.avoidToll?'1':'0');S.setItem('sd_ferry',cfg.avoidFerry?'1':'0');
     S.setItem('sd_mode',cfg.mode);S.setItem('sd_fast',cfg.fast?'1':'0');
-    S.setItem('sd_pause',String(cfg.pause));S.setItem('sd_mic',cfg.micLang);S.setItem('sd_name',cfg.name);S.setItem('sd_auto',cfg.autoLevel?'1':'0');S.setItem('sd_dvoice',cfg.dVoice?'1':'0');}
+    S.setItem('sd_pause',String(cfg.pause));S.setItem('sd_mic',cfg.micLang);S.setItem('sd_name',cfg.name);S.setItem('sd_auto',cfg.autoLevel?'1':'0');S.setItem('sd_dvoice',cfg.dVoice?'1':'0');S.setItem('sd_trans',cfg.trans?'1':'0');}
 
   let memory;try{memory=JSON.parse(S.getItem('sd_memory'));}catch(e){}
   if(!memory)memory={profile:{},frequent_errors:[],vocab_learned:[],sessions:[]};
@@ -270,6 +290,14 @@
   let lastAlertAt=0,lastRadarWarn=0,lastPos=null,startPos=null,destPos=null,avoidPoints=[];
   let maneuvers=[],manIdx=0,routePts=[],offCount=0,follow=cfg.follow,arrived=false;
   let currentLimit=null,limitCache={pos:null,at:0,ways:[]},wakeLock=null;
+  let heading=null,limitSure=false,lastManeuverSaid='',lastRerouteAt=0;
+  /* Panneaux officiels (base de la Sécurité routière) + corrections manuelles. */
+  let signs=[];try{signs=JSON.parse(S.getItem('sd_signs'))||[];}catch(e){signs=[];}
+  let manual=[];try{manual=JSON.parse(S.getItem('sd_manual'))||[];}catch(e){manual=[];}
+  let signLimit=null,signAt=null,signDist=0;
+  function saveSigns(){try{S.setItem('sd_signs',JSON.stringify(signs));return true;}
+    catch(e){toast('Trop de panneaux pour le stockage : importe un seul département.');return false;}}
+  function saveManual(){try{S.setItem('sd_manual',JSON.stringify(manual));}catch(e){}}
 
   const LEVELS={
     A1:"CRITICAL — the user is a TRUE BEGINNER. Obey strictly:\n"
@@ -311,7 +339,13 @@
       +"The text you receive comes from speech recognition, so some words may be wrong or garbled. "
       +"Guess what the user meant from the context instead of reacting to the odd words, and never correct a mistake "
       +"that is clearly a transcription error rather than the user's English.\n\n"
-      +"LEVEL "+cfg.level+": "+LEVELS[cfg.level]+"\nMEMORY: "+memText();}
+      +"LEVEL "+cfg.level+": "+LEVELS[cfg.level]+"\n"
+      +((discreet||cfg.trans)
+        ?"You may put the French translation in parentheses after a difficult word.\n"
+        :"IMPORTANT: this is spoken out loud, so do NOT write French translations in parentheses — hearing them "
+         +"breaks the flow. Instead pick an easier English word, or explain it with two very simple English words. "
+         +"Only give French if he asks what a word means.\n")
+      +"MEMORY: "+memText();}
 
   function setState(s){appState=s;document.body.dataset.state=s;
     $('glyph').textContent={idle:'🦥',listening:'🎙️',thinking:'💭',speaking:'💬',alert:'⚠️'}[s]||'🦥';}
@@ -375,6 +409,8 @@
 
   function detectCommand(t){
     const s=' '+(t||'').toLowerCase()+' ';
+    let ml=s.match(/(?:here it'?s|the limit is|it'?s limited to|ici c'?est|la limite est|limit[ée] à|limite a)\s*(\d{2,3})/);
+    if(ml){const v=parseInt(ml[1],10);if(v>=5&&v<=150)return{action:'set_limit',limit:v};}
     if(/(remove|delete|forget|supprime|enlève|enleve|efface).{0,25}(radar|camera)/.test(s))return{action:'unmark_radar'};
     if(/(radar|speed camera)/.test(s))return{action:'mark_radar'};
     if(/(bloqu|bouchon|embouteill|blocked|traffic jam|jam ahead|avoid this)/.test(s))return{action:'reroute_avoid'};
@@ -534,6 +570,7 @@
       case 'reroute_avoid': avoidHere(); break;
       case 'mark_radar': markRadar(); break;
       case 'unmark_radar': unmarkRadar(); break;
+      case 'set_limit': if(o.limit)setManualLimit(o.limit); break;
       case 'clear_route': clearRoute(); break;
       case 'set_mode': if(['auto','pedestrian','bicycle'].includes(o.mode))setMode(o.mode,true); break;}}
 
@@ -554,6 +591,14 @@
     l1=a.lat*Math.PI/180,l2=b.lat*Math.PI/180,
     x=Math.sin(dLat/2)**2+Math.cos(l1)*Math.cos(l2)*Math.sin(dLon/2)**2;
     return 2*R*Math.asin(Math.sqrt(x));}
+  function bearing(a,b){
+    const y=Math.sin((b.lon-a.lon)*Math.PI/180)*Math.cos(b.lat*Math.PI/180);
+    const x=Math.cos(a.lat*Math.PI/180)*Math.sin(b.lat*Math.PI/180)
+           -Math.sin(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.cos((b.lon-a.lon)*Math.PI/180);
+    return (Math.atan2(y,x)*180/Math.PI+360)%360;}
+  /* Écart d'angle en ignorant le sens (une route dans les deux sens = même axe). */
+  function axisDiff(a,b){let d=Math.abs(((a-b)%180+180)%180);return d>90?180-d:d;}
+
   function segDist(p,a,b){
     const kx=111320*Math.cos(p.lat*Math.PI/180),ky=110540;
     const px=p.lon*kx,py=p.lat*ky,ax=a.lon*kx,ay=a.lat*ky,bx=b.lon*kx,by=b.lat*ky;
@@ -591,17 +636,53 @@
       const j=await r.json();
       limitCache.ways=(j.elements||[]).filter(e=>e.geometry&&e.geometry.length>1&&e.tags&&e.tags.highway);
     }catch(e){/* on garde les données précédentes */}}
+  /* On ne prend une route en compte que si elle va dans le MÊME AXE que nous :
+     une sortie de parking perpendiculaire ne peut plus voler la limite. */
+  /* 1) ma correction manuelle  2) le dernier panneau officiel croisé
+     3) la limite inscrite dans OSM  4) une estimation selon le type de route. */
+  function manualHere(){
+    if(!lastPos||!manual.length)return null;
+    let v=null,bd=Infinity;
+    for(const m of manual){const d=dist(lastPos,{lat:m[0],lon:m[1]});
+      if(d<70&&d<bd){bd=d;v=m[2];}}
+    return v;}
+  function checkSigns(){
+    if(!signs.length||!lastPos)return;
+    let hit=null,bd=Infinity;
+    for(const p of signs){
+      const dLat=Math.abs(p[0]-lastPos.lat);
+      if(dLat>0.0006)continue;                      // pré-filtre rapide
+      const d=dist(lastPos,{lat:p[0],lon:p[1]});
+      if(d<32&&d<bd){bd=d;hit=p;}}
+    if(hit){signLimit=hit[2];signAt={lat:hit[0],lon:hit[1]};signDist=0;return;}
+    /* Un panneau reste valable jusqu'au suivant, dans la limite de 8 km. */
+    if(signAt&&lastPos){if(dist(signAt,lastPos)>8000){signLimit=null;signAt=null;}}}
+
   function limitHere(){
+    const mv=manualHere();
+    if(mv!=null){limitSure=true;return mv;}          // ma correction fait toujours foi
+    if(signLimit!=null){limitSure=true;return signLimit;}
     if(!cfg.useOsm||!lastPos||!limitCache.ways.length)return null;
-    let best=null,bd=Infinity;
+    let best=null,bd=Infinity,bestTagged=null,btd=Infinity;
     for(const w of limitCache.ways){
       const g=w.geometry;
       for(let i=0;i<g.length-1;i++){
         const d=segDist(lastPos,g[i],g[i+1]);
-        if(d<bd){bd=d;best=w;if(bd<5)break;}}}
-    if(!best||bd>45)return null;
-    const t=best.tags||{};
-    return parseMaxspeed(t.maxspeed)||DEF_LIMIT[t.highway]||null;}
+        if(d>28)continue;                          // trop loin : ce n'est pas notre route
+        if(heading!=null){
+          const seg=bearing(g[i],g[i+1]);
+          if(axisDiff(seg,heading)>38)continue;    // pas le même axe : on ignore
+        }
+        if(d<bd){bd=d;best=w;}
+        if(parseMaxspeed((w.tags||{}).maxspeed)!=null&&d<btd){btd=d;bestTagged=w;}}}
+    /* Une limite réellement inscrite dans les données prime sur une valeur déduite. */
+    const pick=(bestTagged&&btd<=bd+12)?bestTagged:best;
+    if(!pick)return null;
+    const t=pick.tags||{};
+    const tagged=parseMaxspeed(t.maxspeed);
+    if(tagged!=null){limitSure=true;return tagged;}
+    limitSure=false;
+    return DEF_LIMIT[t.highway]||null;}
 
   // ---------- GPS ----------
   let map=null,marker=null,routeLine=null,radarLayer=null,destMarker=null,startMarker=null,watchId=null;
@@ -617,12 +698,20 @@
   function startGeo(){
     if(!('geolocation'in navigator)||watchId!==null)return;
     watchId=navigator.geolocation.watchPosition(pos=>{
-      const c=pos.coords;lastPos={lat:c.latitude,lon:c.longitude};
+      const c=pos.coords;
+      const prev=lastPos;
+      lastPos={lat:c.latitude,lon:c.longitude};
       const kmh=(c.speed==null||isNaN(c.speed))?null:Math.max(0,Math.round(c.speed*3.6));
+      /* Cap réel : celui du GPS si dispo, sinon calculé entre deux positions.
+         Sert à savoir dans quel SENS on roule (fini les demi-tours). */
+      if(c.heading!=null&&!isNaN(c.heading)&&kmh!=null&&kmh>4)heading=c.heading;
+      else if(prev&&kmh!=null&&kmh>8){
+        const d=dist(prev,lastPos);
+        if(d>6)heading=bearing(prev,lastPos);}
       if(kmh!=null)drive.maxSpeed=Math.max(drive.maxSpeed,kmh);
-      refreshLimits();currentLimit=limitHere();
+      refreshLimits();checkSigns();currentLimit=limitHere();
       const shown=currentLimit||(cfg.useOsm?null:cfg.limit);
-      $('limBadge').textContent=shown?shown:'--';
+      $('limBadge').textContent=shown?((currentLimit&&!limitSure)?'~'+shown:shown):'--';
       $('speedVal').textContent=kmh==null?'--':kmh;
       const eff=currentLimit||cfg.limit;
       $('speedBox').classList.toggle('over',kmh!=null&&cfg.mode==='auto'&&kmh>eff+cfg.tol);
@@ -636,7 +725,10 @@
   function checkSpeed(kmh){
     if(!cfg.alert||cfg.mode!=='auto'||kmh==null)return;
     const lim=currentLimit||cfg.limit;
-    if(kmh<=lim+cfg.tol)return;
+    /* Si la limite est seulement déduite du type de route, on ne gronde pas :
+       on laisse une grosse marge, car c'est là que les erreurs arrivent. */
+    const margin=cfg.tol+((currentLimit&&!limitSure)?15:0);
+    if(kmh<=lim+margin)return;
     const now=Date.now();if(now-lastAlertAt<20000)return;
     if(appState==='thinking'||appState==='alert')return;
     lastAlertAt=now;drive.alerts++;
@@ -652,8 +744,15 @@
     if(!cfg.guide||!lastPos||manIdx>=maneuvers.length||appState==='thinking')return;
     const m=maneuvers[manIdx];const d=dist(lastPos,m);
     if(d<35){manIdx++;return;}
-    if(d<90&&m.said<2){m.said=2;interrupt(m.text);return;}
-    if(d<330&&m.said<1){m.said=1;interrupt("Dans "+Math.round(d/50)*50+" mètres, "+m.text.replace(/^./,c=>c.toLowerCase()));}}
+    /* On ne réclame jamais un demi-tour : on suit la route choisie par le conducteur. */
+    if(/demi-tour|faire demi|u-turn/i.test(m.text)){manIdx++;return;}
+    if(d>2500){manIdx++;return;}                       // manœuvre déjà loin derrière
+    const say=t=>{
+      if(t===lastManeuverSaid)return;                  // jamais deux fois la même phrase
+      lastManeuverSaid=t;interrupt(t);};
+    if(d<90&&m.said<2){m.said=2;say(m.text);return;}
+    if(d<330&&m.said<1){m.said=1;
+      say("Dans "+Math.round(d/50)*50+" mètres, "+m.text.replace(/^./,c=>c.toLowerCase()));}}
 
   function checkArrival(){
     if(!destPos||!lastPos||arrived)return;
@@ -667,8 +766,12 @@
     for(let i=0;i<routePts.length-1;i++){
       const d=segDist(lastPos,{lat:routePts[i][0],lon:routePts[i][1]},{lat:routePts[i+1][0],lon:routePts[i+1][1]});
       if(d<bd){bd=d;if(bd<45)break;}}
-    if(bd>80){offCount++;
-      if(offCount>=3){offCount=0;interrupt("Tu as changé de route, je recalcule.");computeRoute(true);}}
+    if(bd>110){offCount++;
+      /* Un recalcul au maximum toutes les 30 s : si tu as choisi ta route,
+         je m'adapte une fois et je me tais. */
+      if(offCount>=3&&Date.now()-lastRerouteAt>30000){
+        offCount=0;lastRerouteAt=Date.now();
+        interrupt("Tu as changé de route, je recalcule.");computeRoute(true);}}
     else offCount=0;}
 
   function markRadar(){
@@ -723,7 +826,11 @@
     if(!destPos)return;
     const co={};
     if(cfg.mode==='auto')co.auto={use_highways:cfg.avoidHw?0:1,use_tolls:cfg.avoidToll?0:1,use_ferry:cfg.avoidFerry?0:1};
-    const body={locations:[{lat:o.lat,lon:o.lon},{lat:destPos.lat,lon:destPos.lon}],costing:cfg.mode,
+    const from={lat:o.lat,lon:o.lon};
+    /* On indique le sens dans lequel on roule : le routeur repart devant nous
+       au lieu d'exiger un demi-tour. */
+    if(fromCurrent&&heading!=null){from.heading=Math.round(heading);from.heading_tolerance=90;}
+    const body={locations:[from,{lat:destPos.lat,lon:destPos.lon}],costing:cfg.mode,
       costing_options:co,directions_options:{units:"kilometers",language:"fr-FR"}};
     if(avoidPoints.length)body.exclude_locations=avoidPoints.slice(-12);
     let data;
@@ -734,7 +841,7 @@
       if(avoidPoints.length){avoidPoints=[];toast('Impossible d\u2019éviter : je garde la route d\u2019origine.');}
       else toast('Itinéraire introuvable.');
       return;}
-    routePts=[];maneuvers=[];manIdx=0;
+    routePts=[];maneuvers=[];manIdx=0;lastManeuverSaid='';
     data.trip.legs.forEach(leg=>{
       const shape=decodePoly(leg.shape);routePts=routePts.concat(shape);
       (leg.maneuvers||[]).forEach(m=>{
@@ -803,11 +910,13 @@
         (JSON.parse(txt).features||[]).forEach(f=>{const g=f.geometry;
           if(g&&g.type==='Point')found.push({lat:g.coordinates[1],lon:g.coordinates[0]});});
       }else{
-        const lines=txt.split(/\r?\n/).filter(x=>x.trim());
-        const sep=lines[0].includes(';')?';':',';
-        const head=lines[0].split(sep).map(h=>h.trim().toLowerCase().replace(/"/g,''));
-        const li=head.findIndex(h=>/^lat/.test(h)),oi=head.findIndex(h=>/^(lon|lng)/.test(h));
-        if(li<0||oi<0){toast('Colonnes latitude/longitude introuvables.');return;}
+        const lines=txt.replace(/^\uFEFF/,'').split(/\r?\n/).filter(x=>x.trim());
+        const sep=(lines[0].split(';').length>lines[0].split(',').length)?';':',';
+        const head=lines[0].split(sep).map(h=>h.trim().toLowerCase().replace(/["']/g,''));
+        let li=head.findIndex(h=>/^lat(itude)?$/.test(h)),oi=head.findIndex(h=>/^(lon|lng|longitude)$/.test(h));
+        if(li<0)li=head.findIndex(h=>/latitude|^lat/.test(h));
+        if(oi<0)oi=head.findIndex(h=>/longitude|^lon|^lng/.test(h));
+        if(li<0||oi<0){toast('Colonnes latitude/longitude introuvables ('+head.slice(0,6).join(', ')+'…).');return;}
         for(let k=1;k<lines.length;k++){const c=lines[k].split(sep);
           const la=parseFloat((c[li]||'').replace(/"/g,'').replace(',','.'));
           const lo=parseFloat((c[oi]||'').replace(/"/g,'').replace(',','.'));
@@ -816,6 +925,80 @@
       radars=found;saveRadars();drawRadars();
       $('radarInfo').textContent=radars.length+' radar(s) chargé(s).';toast(radars.length+' radars importés.');
     }catch(e){toast('Fichier illisible : '+e.message);}};
+    rd.readAsText(file);}
+
+  /* Fichier officiel VMA : colonnes Code_list ("B14 =>70 , M9z => Rappel") et Coords ("47.94, -2.05").
+     B14 = limitation, B30 = zone 30, EB10 = entrée d'agglo (50), B33/B51/EB20 = fin de limitation. */
+  function importSigns(file){
+    const rd=new FileReader();
+    rd.onload=()=>{
+      try{
+        const lines=String(rd.result).split(/\r?\n/);
+        if(lines.length<2){toast('Fichier vide.');return;}
+        const head=lines[0].split(';').map(h=>h.trim().toLowerCase().replace(/"/g,''));
+        const ci=head.findIndex(h=>/code/.test(h)), xi=head.findIndex(h=>/coord/.test(h));
+        if(ci<0||xi<0){toast('Ce fichier n\u2019a pas les colonnes Code_list et Coords.');return;}
+        const out=[];
+        for(let k=1;k<lines.length;k++){
+          const row=lines[k];if(!row.trim())continue;
+          const c=row.split(';');
+          const code=(c[ci]||'').replace(/"/g,'');
+          const coord=(c[xi]||'').replace(/"/g,'');
+          const mv=coord.match(/(-?\d+[.,]\d+)\s*,\s*(-?\d+[.,]\d+)/);
+          if(!mv)continue;
+          const la=parseFloat(mv[1].replace(',','.')), lo=parseFloat(mv[2].replace(',','.'));
+          if(isNaN(la)||isNaN(lo))continue;
+          let v=null;
+          let m2=code.match(/B14\s*=>\s*(\d+)/i);
+          if(m2)v=parseInt(m2[1],10);
+          else if(/B30/i.test(code))v=30;
+          else if(/EB10/i.test(code))v=50;
+          if(v==null||v<5||v>150)continue;
+          out.push([Math.round(la*1e5)/1e5,Math.round(lo*1e5)/1e5,v]);}
+        if(!out.length){toast('Aucun panneau de vitesse lu dans ce fichier.');return;}
+        /* On cumule les régions : on peut importer PDL puis NMD sans perdre la première. */
+        const seen=new Set(signs.map(p=>p[0]+','+p[1]));
+        let added=0;
+        for(const p of out){const k=p[0]+','+p[1];if(seen.has(k))continue;seen.add(k);signs.push(p);added++;}
+        const before=signs.length;
+        if(saveSigns()){
+          $('signInfo').textContent=signs.length+' panneaux officiels chargés.';
+          toast(added+' panneaux ajoutés ('+signs.length+' au total).');}
+        else{signs=signs.slice(0,before-added);
+          $('signInfo').textContent=signs.length+' panneaux (import refusé : stockage plein).';}
+      }catch(e){toast('Fichier illisible : '+e.message);}};
+    rd.readAsText(file,'utf-8');}
+
+  /* Correction manuelle : je connais ma route mieux que les données. */
+  function setManualLimit(v){
+    if(!lastPos){toast('Position inconnue.');return;}
+    v=parseInt(v,10);
+    if(isNaN(v)||v<5||v>150){toast('Valeur invalide.');return;}
+    manual.push([Math.round(lastPos.lat*1e5)/1e5,Math.round(lastPos.lon*1e5)/1e5,v]);
+    if(manual.length>4000)manual=manual.slice(-4000);
+    saveManual();currentLimit=v;limitSure=true;$('limBadge').textContent=v;
+    $('manualInfo').textContent=manual.length+' correction(s) enregistrée(s).';
+    toast('Noté : ici c\u2019est '+v+' km/h.');}
+
+  /* Sauvegarde complète : tout ce que l'appli a appris, dans un fichier. */
+  function exportBackup(){
+    const data={v:1,date:new Date().toISOString(),cfg:cfg,memory:memory,radars:radars,manual:manual};
+    const blob=new Blob([JSON.stringify(data)],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);
+    a.download='slothdrive-sauvegarde-'+new Date().toISOString().slice(0,10)+'.json';
+    a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+    toast('Sauvegarde téléchargée.');}
+  function importBackup(file){
+    const rd=new FileReader();
+    rd.onload=()=>{try{
+      const d=JSON.parse(rd.result);
+      if(d.cfg)Object.assign(cfg,d.cfg);
+      if(d.memory)memory=d.memory;
+      if(Array.isArray(d.radars))radars=d.radars;
+      if(Array.isArray(d.manual))manual=d.manual;
+      saveCfg();saveMem();saveRadars();saveManual();
+      toast('Sauvegarde restaurée. Recharge la page.');
+    }catch(e){toast('Sauvegarde illisible.');}};
     rd.readAsText(file);}
 
   // ---------- Panneaux / bilan ----------
@@ -959,6 +1142,12 @@
   document.querySelectorAll('.modes button').forEach(b=>b.onclick=()=>setMode(b.dataset.mode,true));
   document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>closePanel(b.dataset.close));
   $('inpRadarFile').onchange=e=>{if(e.target.files[0])importRadars(e.target.files[0]);};
+  $('inpSignFile').onchange=e=>{if(e.target.files[0]){toast('Lecture du fichier…');importSigns(e.target.files[0]);}};
+  $('btnSignClear').onclick=()=>{signs=[];manual=[];signLimit=null;signAt=null;saveSigns();saveManual();
+    $('signInfo').textContent='Aucun panneau chargé.';$('manualInfo').textContent='';toast('Effacé.');};
+  $('btnExport').onclick=exportBackup;
+  $('inpBackup').onchange=e=>{if(e.target.files[0])importBackup(e.target.files[0]);};
+  $('btnLimit').onclick=()=>{const v=prompt('Limite réelle ici (km/h) ?',currentLimit||50);if(v)setManualLimit(v);};
   $('btnSave').onclick=()=>{
     cfg.key=$('inpKey').value.trim();cfg.level=$('inpLevel').value;
     cfg.limit=parseInt($('inpLimit').value,10)||80;cfg.tol=parseInt($('inpTol').value,10);
@@ -969,7 +1158,7 @@
     const p=parseFloat($('inpPause').value);cfg.pause=isNaN(p)?2500:Math.round(p*1000);
     const oldMic=cfg.micLang,oldFast=cfg.fast;
     cfg.micLang=$('inpMic').value;cfg.fast=$('inpFast').checked;cfg.name=$('inpName').value.trim();
-    cfg.autoLevel=$('inpAuto').checked;cfg.dVoice=$('inpDVoice').checked;
+    cfg.autoLevel=$('inpAuto').checked;cfg.dVoice=$('inpDVoice').checked;cfg.trans=$('inpTrans').checked;
     if(cfg.micLang!==oldMic){stopRecog();recog=null;}        // le micro doit être recréé
     if(cfg.fast!==oldFast){MODELS=cfg.fast?FAST:RICH;modelIdx=0;S.setItem('sd_model','0');}
     saveCfg();refreshKeyBanner();$('lvlTag').textContent=cfg.level;
@@ -981,11 +1170,13 @@
   $('inpKey').value=cfg.key;$('inpLevel').value=cfg.level;$('inpLimit').value=cfg.limit;$('inpTol').value=cfg.tol;
   $('inpOsm').checked=cfg.useOsm;$('inpAlert').checked=cfg.alert;$('inpGuide').checked=cfg.guide;
   $('inpReroute').checked=cfg.reroute;$('inpFollow').checked=cfg.follow;
-  $('inpAuto').checked=cfg.autoLevel;$('inpDVoice').checked=cfg.dVoice;$('inpName').value=cfg.name;$('inpMic').value=cfg.micLang;$('inpPause').value=(cfg.pause/1000).toFixed(1);$('inpFast').checked=cfg.fast;
+  $('inpAuto').checked=cfg.autoLevel;$('inpDVoice').checked=cfg.dVoice;$('inpTrans').checked=cfg.trans;$('inpName').value=cfg.name;$('inpMic').value=cfg.micLang;$('inpPause').value=(cfg.pause/1000).toFixed(1);$('inpFast').checked=cfg.fast;
   $('inpHw').checked=cfg.avoidHw;$('inpToll').checked=cfg.avoidToll;$('inpFerry').checked=cfg.avoidFerry;
   $('lvlTag').textContent=cfg.level;
   document.querySelectorAll('.modes button').forEach(b=>b.classList.toggle('on',b.dataset.mode===cfg.mode));
   if(radars.length)$('radarInfo').textContent=radars.length+' radar(s) en mémoire.';
+  if(signs.length)$('signInfo').textContent=signs.length+' panneaux officiels chargés.';
+  if(manual.length)$('manualInfo').textContent=manual.length+' correction(s) enregistrée(s).';
   const mc=Object.keys(memory.profile||{}).length;
   $('memInfo').textContent=mc?('Mémoire : '+mc+' info(s) retenue(s).'):'Mémoire vide pour l\u2019instant.';
   $('modelInfo').textContent='Modèle : '+MODELS[modelIdx]+' · limites de vitesse : OpenStreetMap.';
