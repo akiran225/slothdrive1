@@ -26,6 +26,16 @@
     border-radius:999px;padding:7px 12px;font-size:13px;font-weight:600;cursor:pointer}
   .chip:active{background:var(--surface2)}
 
+  /* Vue conduite : la carte s'incline et pivote avec le cap, la voiture reste en bas. */
+  body.nav3d #mapWrap{perspective:800px;perspective-origin:50% 78%}
+  body.nav3d #map{left:-50%;top:-50%;right:auto;bottom:auto;width:200%;height:200%;
+    transform-origin:50% 50%;
+    transform:translateY(9%) rotateX(54deg) rotate(var(--hdg,0deg));
+    transition:transform .35s linear}
+  .car{position:absolute;z-index:402;left:50%;top:72%;margin:-16px 0 0 -13px;
+    width:26px;height:32px;display:none;pointer-events:none;
+    filter:drop-shadow(0 3px 6px rgba(0,0,0,.6))}
+  body.nav3d .car{display:block}
   #mapWrap{flex:1 1 auto;position:relative;margin:0 10px;border-radius:16px;overflow:hidden;
     border:1px solid var(--line);min-height:170px}
   #map{position:absolute;inset:0}
@@ -125,6 +135,7 @@
   <header>
     <div class="brand">🦥 SlothDrive <small id="lvlTag">A1</small></div>
     <div class="hbtns">
+      <button class="chip" id="btnNav3d">🧭</button>
       <button class="chip" id="btnDiscreet">🤫</button>
       <button class="chip" id="btnHist">📖</button>
       <button class="chip" id="btnFull">⛶ Plein écran</button>
@@ -140,6 +151,7 @@
     </div>
     <div class="hud hud-route" id="routeInfo">Aucun itinéraire</div>
     <div class="hud hud-orb"><div class="ring"></div><div class="orb" id="glyph">🦥</div></div>
+    <svg class="car" id="carArrow" viewBox="0 0 26 32"><path d="M13 0 L26 32 L13 25 L0 32 Z" fill="#6FB2C7" stroke="#0F1613" stroke-width="1.5"/></svg>
     <button class="recenter" id="btnRecenter">⌖</button>
     <div class="hud hud-caption" id="caption"><span class="who">Compagnon</span>Appuie sur « Démarrer » : je discute en anglais et je te guide.</div>
   </div>
@@ -291,6 +303,7 @@
   let maneuvers=[],manIdx=0,routePts=[],offCount=0,follow=cfg.follow,arrived=false;
   let currentLimit=null,limitCache={pos:null,at:0,ways:[]},wakeLock=null;
   let heading=null,limitSure=false,lastManeuverSaid='',lastRerouteAt=0;
+  let nav3d=S.getItem('sd_nav3d')==='1',shownHdg=0;
   /* Panneaux officiels (base de la Sécurité routière) + corrections manuelles. */
   let signs=[];try{signs=JSON.parse(S.getItem('sd_signs'))||[];}catch(e){signs=[];}
   let manual=[];try{manual=JSON.parse(S.getItem('sd_manual'))||[];}catch(e){manual=[];}
@@ -718,7 +731,12 @@
       const ll=[c.latitude,c.longitude];
       if(!marker)marker=L.circleMarker(ll,{radius:8,color:'#6FB2C7',fillColor:'#6FB2C7',fillOpacity:.95}).addTo(map);
       else marker.setLatLng(ll);
-      if(follow)map.setView(ll,Math.max(map.getZoom(),16));
+      if(follow)map.setView(ll,Math.max(map.getZoom(),nav3d?17:16));
+      if(nav3d&&heading!=null){
+        /* On tourne par le plus court chemin pour éviter le tour complet à 359°->1°. */
+        let d=((heading-shownHdg)%360+540)%360-180;
+        shownHdg+=d;
+        document.documentElement.style.setProperty('--hdg',(-shownHdg)+'deg');}
       checkArrival();checkOffRoute();checkManeuver();checkSpeed(kmh);checkRadar();
     },err=>toast('Position : '+err.message),{enableHighAccuracy:true,maximumAge:1000,timeout:15000});}
 
@@ -1117,6 +1135,17 @@
   $('btnTalk').onclick=()=>convoActive?stopConvo():startConvo();
   $('btnSettings').onclick=()=>openPanel('settingsPanel');
   $('btnHist').onclick=()=>{renderHistory();openPanel('histPanel');};
+  function applyNav3d(){
+    document.body.classList.toggle('nav3d',nav3d);
+    $('btnNav3d').style.borderColor=nav3d?'var(--sloth)':'var(--line)';
+    if(map){
+      /* En vue conduite on ne fait pas glisser la carte à la main : elle suit la voiture. */
+      if(nav3d){map.dragging.disable();follow=true;$('btnRecenter').classList.remove('show');
+        if(lastPos)map.setView([lastPos.lat,lastPos.lon],Math.max(map.getZoom(),17));}
+      else{map.dragging.enable();document.documentElement.style.setProperty('--hdg','0deg');}
+      setTimeout(()=>map.invalidateSize(),320);}}
+  $('btnNav3d').onclick=()=>{nav3d=!nav3d;S.setItem('sd_nav3d',nav3d?'1':'0');
+    applyNav3d();toast(nav3d?'Vue conduite activée.':'Vue carte classique.');};
   $('btnDiscreet').onclick=()=>{
     discreet=!discreet;document.body.classList.toggle('discreet',discreet);
     if(discreet){if(convoActive)stopConvo();setState('idle');
@@ -1180,7 +1209,7 @@
   const mc=Object.keys(memory.profile||{}).length;
   $('memInfo').textContent=mc?('Mémoire : '+mc+' info(s) retenue(s).'):'Mémoire vide pour l\u2019instant.';
   $('modelInfo').textContent='Modèle : '+MODELS[modelIdx]+' · limites de vitesse : OpenStreetMap.';
-  refreshKeyBanner();initMap();startGeo();
+  refreshKeyBanner();initMap();applyNav3d();startGeo();
   if('speechSynthesis'in window)speechSynthesis.onvoiceschanged=()=>{};
   </script>
 </body>
