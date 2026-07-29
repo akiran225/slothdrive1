@@ -32,10 +32,10 @@
      entièrement au lieu de laisser du noir autour. */
   body.nav3d #map{left:-35%;top:-35%;right:auto;bottom:auto;width:170%;height:170%;
     transform-origin:50% 50%;
-    transform:translateY(11.8%) rotateX(var(--tilt,45deg)) rotate(var(--hdg,0deg));
+    transform:translateY(11.8%) rotateX(var(--tilt,10deg)) rotate(var(--hdg,0deg));
     transition:transform .35s linear}
   /* Dégradé façon ciel : masque la ligne d'horizon (le bord lointain de la carte). */
-  .sky{position:absolute;left:0;right:0;top:0;height:42%;z-index:399;display:none;
+  .sky{position:absolute;left:0;right:0;top:0;height:18%;z-index:399;display:none;
     pointer-events:none;background:linear-gradient(to bottom,var(--bg) 0%,rgba(15,22,19,.75) 45%,rgba(15,22,19,0) 100%)}
   body.nav3d .sky{display:block}
   .car{position:absolute;z-index:402;left:50%;top:72%;margin:-16px 0 0 -13px;
@@ -218,8 +218,8 @@
       <div class="switch"><span>Guidage vocal (tournez à droite…)</span><input type="checkbox" id="inpGuide" checked></div>
       <div class="switch"><span>Recalcul auto si je change de route</span><input type="checkbox" id="inpReroute" checked></div>
       <div class="switch"><span>La carte me suit</span><input type="checkbox" id="inpFollow" checked></div>
-      <div><label>Inclinaison de la vue conduite (<span id="tiltVal">45</span>°) — 0 = carte à plat</label>
-        <input type="range" id="inpTilt" min="0" max="60" step="1" value="45"></div>
+      <div><label>Inclinaison de la vue conduite (<span id="tiltVal">10</span>°) — au-delà de 15° une bande noire apparaît en haut, c'est une limite de l'affichage</label>
+        <input type="range" id="inpTilt" min="0" max="15" step="1" value="10"></div>
 
       <div class="divider">Itinéraire voiture — à éviter</div>
       <div class="switch"><span>Éviter les autoroutes</span><input type="checkbox" id="inpHw"></div>
@@ -314,7 +314,7 @@
   let currentLimit=null,limitCache={pos:null,at:0,ways:[]},wakeLock=null;
   let heading=null,limitSure=false,lastManeuverSaid='',lastRerouteAt=0;
   let nav3d=S.getItem('sd_nav3d')!=='0',shownHdg=0;
-  let tilt=parseInt(S.getItem('sd_tilt')||'45',10);if(isNaN(tilt))tilt=45;if(tilt>60)tilt=60;
+  let tilt=parseInt(S.getItem('sd_tilt')||'10',10);if(isNaN(tilt))tilt=10;if(tilt>15)tilt=15;
   function applyTilt(){document.documentElement.style.setProperty('--tilt',tilt+'deg');
     $('tiltVal').textContent=tilt;}
   /* Panneaux officiels (base de la Sécurité routière) + corrections manuelles. */
