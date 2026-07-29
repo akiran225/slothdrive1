@@ -30,10 +30,7 @@
   /* MapLibre affiche la 3D nativement : plus aucune transformation CSS. */
   .maplibregl-ctrl-attrib,.maplibregl-ctrl-logo{display:none!important}
   #map canvas{outline:none}
-  .car{position:absolute;z-index:402;left:50%;top:72%;margin:-16px 0 0 -13px;
-    width:26px;height:32px;display:none;pointer-events:none;
-    filter:drop-shadow(0 3px 6px rgba(0,0,0,.6))}
-  body.nav3d .car{display:block}
+
   #mapWrap{flex:1 1 auto;position:relative;margin:0 10px;border-radius:16px;overflow:hidden;
     border:1px solid var(--line);min-height:170px}
   #map{position:absolute;inset:0}
@@ -150,7 +147,6 @@
     </div>
     <div class="hud hud-route" id="routeInfo">Aucun itinéraire</div>
     <div class="hud hud-orb"><div class="ring"></div><div class="orb" id="glyph">🦥</div></div>
-    <svg class="car" id="carArrow" viewBox="0 0 26 32"><path d="M13 0 L26 32 L13 25 L0 32 Z" fill="#6FB2C7" stroke="#0F1613" stroke-width="1.5"/></svg>
     <button class="recenter" id="btnRecenter">⌖</button>
     <div class="hud hud-caption" id="caption"><span class="who">Compagnon</span>Appuie sur « Démarrer » : je discute en anglais et je te guide.</div>
   </div>
@@ -702,7 +698,7 @@
     return DEF_LIMIT[t.highway]||null;}
 
   // ---------- GPS ----------
-  let map=null,watchId=null;
+  let map=null,watchId=null,meMarker=null;
   function initMap(){
     if(map)return;
     map=new maplibregl.Map({
@@ -719,7 +715,7 @@
         sky:{'sky-color':'#7FB2CC','sky-horizon-blend':0.6,
              'horizon-color':'#cfe3ee','horizon-fog-blend':0.6,
              'fog-color':'#0F1613','fog-ground-blend':0.02}}});
-    map.on('dragstart',()=>{if(!nav3d){follow=false;$('btnRecenter').classList.add('show');}});
+    map.on('dragstart',()=>{follow=false;$('btnRecenter').classList.add('show');});
     map.on('load',()=>{
       map.addSource('route',{type:'geojson',data:{type:'Feature',geometry:{type:'LineString',coordinates:[]}}});
       map.addLayer({id:'route',type:'line',source:'route',
@@ -733,11 +729,22 @@
       map.addLayer({id:'pins',type:'circle',source:'pins',
         paint:{'circle-radius':['get','r'],'circle-color':['get','c'],
                'circle-stroke-width':2,'circle-stroke-color':'#0F1613'}});
+      /* Marqueur de position : il est SUR la carte, donc toujours au bon endroit,
+         même si on déplace la vue à la main. */
+      const el=document.createElement('div');el.style.willChange='transform';
+      el.innerHTML='<svg width="30" height="36" viewBox="0 0 26 32">'
+        +'<path d="M13 0 L26 32 L13 25 L0 32 Z" fill="#6FB2C7" stroke="#0F1613" stroke-width="1.5"/></svg>';
+      meMarker=new maplibregl.Marker({element:el,rotationAlignment:'map',pitchAlignment:'map'})
+        .setLngLat(lastPos?[lastPos.lon,lastPos.lat]:[0.20,47.95]).addTo(map);
       mapReady=true;drawRadars();refreshPins();
       if(routePts.length)setRouteLine();});
     drawRadars();}
   function recenter(){follow=true;$('btnRecenter').classList.remove('show');
-    if(lastPos)map.easeTo({center:[lastPos.lon,lastPos.lat],zoom:Math.max(map.getZoom(),16),duration:400});}
+    if(!lastPos||!map)return;
+    const h=map.getContainer().clientHeight||400;
+    map.easeTo({center:[lastPos.lon,lastPos.lat],zoom:Math.max(map.getZoom(),16),
+      pitch:nav3d?tilt:0,bearing:nav3d&&heading!=null?heading:0,
+      padding:{top:nav3d?Math.round(h*0.44):0,bottom:0,left:0,right:0},duration:400});}
 
   function startGeo(){
     if(!('geolocation'in navigator)||watchId!==null)return;
@@ -760,9 +767,15 @@
       const eff=currentLimit||cfg.limit;
       $('speedBox').classList.toggle('over',kmh!=null&&cfg.mode==='auto'&&kmh>eff+cfg.tol);
       const ll=[c.latitude,c.longitude];
+      if(meMarker){meMarker.setLngLat([c.longitude,c.latitude]);
+        if(heading!=null)meMarker.setRotation(heading);}
       refreshPins();
       if(follow&&map){
-        const o={center:[c.longitude,c.latitude],zoom:Math.max(map.getZoom(),16),duration:900};
+        /* Le décalage bas se fait par la caméra, pas en dessinant ailleurs :
+           la position affichée reste exacte au mètre près. */
+        const h=map.getContainer().clientHeight||400;
+        const o={center:[c.longitude,c.latitude],zoom:Math.max(map.getZoom(),16),
+                 duration:350,padding:{top:nav3d?Math.round(h*0.44):0,bottom:0,left:0,right:0}};
         if(nav3d){o.pitch=tilt;if(heading!=null)o.bearing=heading;}
         map.easeTo(o);}
 
@@ -847,8 +860,6 @@
       geometry:{type:'Point',coordinates:[startPos.lon,startPos.lat]}});
     if(destPos)f.push({type:'Feature',properties:{r:9,c:'#E4674F'},
       geometry:{type:'Point',coordinates:[destPos.lon,destPos.lat]}});
-    if(lastPos&&!nav3d)f.push({type:'Feature',properties:{r:8,c:'#6FB2C7'},
-      geometry:{type:'Point',coordinates:[lastPos.lon,lastPos.lat]}});
     const src=map.getSource('pins');
     if(src)src.setData({type:'FeatureCollection',features:f});}
 
@@ -1189,11 +1200,8 @@
     $('btnNav3d').textContent=nav3d?'🧭 Conduite':'🗺️ Dessus';
     if(map){
       /* En vue conduite on ne fait pas glisser la carte à la main : elle suit la voiture. */
-      if(nav3d){follow=true;$('btnRecenter').classList.remove('show');
-        map.easeTo({pitch:tilt,bearing:heading||0,
-          center:lastPos?[lastPos.lon,lastPos.lat]:map.getCenter(),
-          zoom:Math.max(map.getZoom(),16),duration:600});}
-      else map.easeTo({pitch:0,bearing:0,duration:600});
+      if(nav3d){follow=true;$('btnRecenter').classList.remove('show');recenter();}
+      else map.easeTo({pitch:0,bearing:0,padding:{top:0,bottom:0,left:0,right:0},duration:600});
       refreshPins();setTimeout(()=>map.resize(),320);}}
   $('inpTilt').oninput=e=>{tilt=parseInt(e.target.value,10);S.setItem('sd_tilt',String(tilt));applyTilt();};
   $('btnNav3d').onclick=()=>{nav3d=!nav3d;S.setItem('sd_nav3d',nav3d?'1':'0');
