@@ -27,11 +27,17 @@
   .chip:active{background:var(--surface2)}
 
   /* Vue conduite : la carte s'incline et pivote avec le cap, la voiture reste en bas. */
-  body.nav3d #mapWrap{perspective:800px;perspective-origin:50% 78%}
-  body.nav3d #map{left:-50%;top:-50%;right:auto;bottom:auto;width:200%;height:200%;
+  body.nav3d #mapWrap{perspective:700px;perspective-origin:50% 72%}
+  /* La carte est bien plus grande que l'écran : une fois inclinée, elle le couvre
+     entièrement au lieu de laisser du noir autour. */
+  body.nav3d #map{left:-100%;top:-100%;right:auto;bottom:auto;width:300%;height:300%;
     transform-origin:50% 50%;
-    transform:translateY(9%) rotateX(54deg) rotate(var(--hdg,0deg));
+    transform:translateY(7%) rotateX(var(--tilt,62deg)) rotate(var(--hdg,0deg));
     transition:transform .35s linear}
+  /* Dégradé façon ciel : masque la ligne d'horizon (le bord lointain de la carte). */
+  .sky{position:absolute;left:0;right:0;top:0;height:42%;z-index:399;display:none;
+    pointer-events:none;background:linear-gradient(to bottom,var(--bg) 0%,rgba(15,22,19,.75) 45%,rgba(15,22,19,0) 100%)}
+  body.nav3d .sky{display:block}
   .car{position:absolute;z-index:402;left:50%;top:72%;margin:-16px 0 0 -13px;
     width:26px;height:32px;display:none;pointer-events:none;
     filter:drop-shadow(0 3px 6px rgba(0,0,0,.6))}
@@ -80,6 +86,7 @@
   #controls{flex:0 0 auto;padding:8px 10px calc(8px + env(safe-area-inset-bottom));
     display:flex;flex-direction:column;gap:7px}
   body.driving #controls .io-row,body.driving #controls .modes{display:none}
+  body.nav3d #controls .modes{display:none}   /* plus de place pour la route */
   #chatRow{display:none}
   body.discreet #chatRow{display:flex}
   body.discreet #btnTalk{display:none}
@@ -135,7 +142,7 @@
   <header>
     <div class="brand">🦥 SlothDrive <small id="lvlTag">A1</small></div>
     <div class="hbtns">
-      <button class="chip" id="btnNav3d">🧭</button>
+      <button class="chip" id="btnNav3d">🧭 Vue</button>
       <button class="chip" id="btnDiscreet">🤫</button>
       <button class="chip" id="btnHist">📖</button>
       <button class="chip" id="btnFull">⛶ Plein écran</button>
@@ -145,6 +152,7 @@
 
   <div id="mapWrap">
     <div id="map"></div>
+    <div class="sky"></div>
     <div class="hud hud-speed" id="speedBox">
       <div><span class="val" id="speedVal">--</span> <span class="unit">km/h</span></div>
       <div class="limit" id="limBadge">--</div>
@@ -210,6 +218,8 @@
       <div class="switch"><span>Guidage vocal (tournez à droite…)</span><input type="checkbox" id="inpGuide" checked></div>
       <div class="switch"><span>Recalcul auto si je change de route</span><input type="checkbox" id="inpReroute" checked></div>
       <div class="switch"><span>La carte me suit</span><input type="checkbox" id="inpFollow" checked></div>
+      <div><label>Inclinaison de la vue conduite (<span id="tiltVal">62</span>°)</label>
+        <input type="range" id="inpTilt" min="0" max="75" step="1" value="62"></div>
 
       <div class="divider">Itinéraire voiture — à éviter</div>
       <div class="switch"><span>Éviter les autoroutes</span><input type="checkbox" id="inpHw"></div>
@@ -303,7 +313,10 @@
   let maneuvers=[],manIdx=0,routePts=[],offCount=0,follow=cfg.follow,arrived=false;
   let currentLimit=null,limitCache={pos:null,at:0,ways:[]},wakeLock=null;
   let heading=null,limitSure=false,lastManeuverSaid='',lastRerouteAt=0;
-  let nav3d=S.getItem('sd_nav3d')==='1',shownHdg=0;
+  let nav3d=S.getItem('sd_nav3d')!=='0',shownHdg=0;
+  let tilt=parseInt(S.getItem('sd_tilt')||'62',10);if(isNaN(tilt))tilt=62;
+  function applyTilt(){document.documentElement.style.setProperty('--tilt',tilt+'deg');
+    $('tiltVal').textContent=tilt;}
   /* Panneaux officiels (base de la Sécurité routière) + corrections manuelles. */
   let signs=[];try{signs=JSON.parse(S.getItem('sd_signs'))||[];}catch(e){signs=[];}
   let manual=[];try{manual=JSON.parse(S.getItem('sd_manual'))||[];}catch(e){manual=[];}
@@ -1138,12 +1151,14 @@
   function applyNav3d(){
     document.body.classList.toggle('nav3d',nav3d);
     $('btnNav3d').style.borderColor=nav3d?'var(--sloth)':'var(--line)';
+    $('btnNav3d').textContent=nav3d?'🧭 Conduite':'🗺️ Dessus';
     if(map){
       /* En vue conduite on ne fait pas glisser la carte à la main : elle suit la voiture. */
       if(nav3d){map.dragging.disable();follow=true;$('btnRecenter').classList.remove('show');
         if(lastPos)map.setView([lastPos.lat,lastPos.lon],Math.max(map.getZoom(),17));}
       else{map.dragging.enable();document.documentElement.style.setProperty('--hdg','0deg');}
       setTimeout(()=>map.invalidateSize(),320);}}
+  $('inpTilt').oninput=e=>{tilt=parseInt(e.target.value,10);S.setItem('sd_tilt',String(tilt));applyTilt();};
   $('btnNav3d').onclick=()=>{nav3d=!nav3d;S.setItem('sd_nav3d',nav3d?'1':'0');
     applyNav3d();toast(nav3d?'Vue conduite activée.':'Vue carte classique.');};
   $('btnDiscreet').onclick=()=>{
@@ -1209,6 +1224,7 @@
   const mc=Object.keys(memory.profile||{}).length;
   $('memInfo').textContent=mc?('Mémoire : '+mc+' info(s) retenue(s).'):'Mémoire vide pour l\u2019instant.';
   $('modelInfo').textContent='Modèle : '+MODELS[modelIdx]+' · limites de vitesse : OpenStreetMap.';
+  $('inpTilt').value=tilt;applyTilt();
   refreshKeyBanner();initMap();applyNav3d();startGeo();
   if('speechSynthesis'in window)speechSynthesis.onvoiceschanged=()=>{};
   </script>
